@@ -152,17 +152,28 @@ Status DBImpl::FlushMemTableToOutputFile(
   assert(cfd->imm()->NumNotFlushed() != 0);
   assert(cfd->imm()->IsFlushPending());
 
+  // FlushJob flush_job(
+  //     dbname_, cfd, immutable_db_options_, mutable_cf_options,
+  //     port::kMaxUint64 /* memtable_id */, file_options_for_compaction_,
+  //     versions_.get(), &mutex_, &shutting_down_, snapshot_seqs,
+  //     earliest_write_conflict_snapshot, snapshot_checker, job_context,
+  //     log_buffer, directories_.GetDbDir(), GetDataDir(cfd, 0U),
+  //     GetCompressionFlush(*cfd->ioptions(), mutable_cf_options), stats_,
+  //     &event_logger_, mutable_cf_options.report_bg_io_stats,
+  //     true /* sync_output_directory */, true /* write_manifest */, thread_pri,
+  //     io_tracer_, db_id_, db_session_id_, cfd->GetFullHistoryTsLow(),
+  //     &blob_callback_);
   FlushJob flush_job(
-      dbname_, cfd, immutable_db_options_, mutable_cf_options,
-      port::kMaxUint64 /* memtable_id */, file_options_for_compaction_,
-      versions_.get(), &mutex_, &shutting_down_, snapshot_seqs,
-      earliest_write_conflict_snapshot, snapshot_checker, job_context,
-      log_buffer, directories_.GetDbDir(), GetDataDir(cfd, 0U),
-      GetCompressionFlush(*cfd->ioptions(), mutable_cf_options), stats_,
-      &event_logger_, mutable_cf_options.report_bg_io_stats,
-      true /* sync_output_directory */, true /* write_manifest */, thread_pri,
-      io_tracer_, db_id_, db_session_id_, cfd->GetFullHistoryTsLow(),
-      &blob_callback_);
+    dbname_, cfd, immutable_db_options_, mutable_cf_options,
+    port::kMaxUint64 /* memtable_id */, file_options_for_compaction_,
+    versions_.get(), &mutex_, &shutting_down_, snapshot_seqs,
+    earliest_write_conflict_snapshot, snapshot_checker, job_context,
+    log_buffer, directories_.GetDbDir(), GetDataDir(cfd, 0U),
+    GetCompressionFlush(*cfd->ioptions(), mutable_cf_options), stats_,
+    &event_logger_, mutable_cf_options.report_bg_io_stats,
+    true /* sync_output_directory */, true /* write_manifest */, thread_pri,
+    io_tracer_, db_id_, db_session_id_, cfd->GetFullHistoryTsLow(),
+    &blob_callback_, keyupd_lru, score_tbl);
   FileMetaData file_meta;
 
 #ifndef ROCKSDB_LITE
@@ -408,7 +419,7 @@ Status DBImpl::AtomicFlushMemTablesToOutputFiles(
         stats_, &event_logger_, mutable_cf_options.report_bg_io_stats,
         false /* sync_output_directory */, false /* write_manifest */,
         thread_pri, io_tracer_, db_id_, db_session_id_,
-        cfd->GetFullHistoryTsLow()));
+        cfd->GetFullHistoryTsLow(), nullptr, keyupd_lru, score_tbl));
   }
 
   std::vector<FileMetaData> file_meta(num_cfs);

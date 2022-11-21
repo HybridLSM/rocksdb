@@ -1,5 +1,5 @@
-#ifndef STORAGE_LEVELDB_DB_SSTSCORETABLE_H_
-#define STORAGE_LEVELDB_DB_SSTSCORETABLE_H_
+#pragma once
+
 
 #include <unordered_map>
 #include <cassert>
@@ -73,5 +73,3 @@ namespace ROCKSDB_NAMESPACE {
 	};
 
 }
-
-#endif

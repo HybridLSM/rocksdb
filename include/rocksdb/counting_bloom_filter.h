@@ -1,3 +1,5 @@
+#pragma once
+
 #include "rocksdb/filter_policy.h"
 
 #include "rocksdb/slice.h"
@@ -7,9 +9,9 @@
 
 namespace ROCKSDB_NAMESPACE{
 
-static uint32_t BloomHash(const Slice& key) {
-  return Hash(key.data(), key.size(), 0xbc9f1d34);
-}
+// static uint32_t BloomHash(const Slice& key) {
+//   return Hash(key.data(), key.size(), 0xbc9f1d34);
+// }
 
 class CountingBloomFilter {
  public:
@@ -118,4 +120,4 @@ class CountingBloomFilter {
   int capacity_;
 };
 
-} // namespace leveldb
+} // namespace rocksdb

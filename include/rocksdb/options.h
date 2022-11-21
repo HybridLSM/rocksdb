@@ -515,6 +515,23 @@ struct DBOptions {
   // Default: empty
   std::vector<DbPath> db_paths;
 
+  // Use this if your DB want to put hot data into a faster device and cold
+  // data into a larger but slower device. Relative paths are defined in 
+  // db_paths. 
+  // Default: false
+  bool hot_aware = false;
+
+  // Use this if you want to migrate SSTs in faster device to slower device
+  // before compaction, in order to save bandwidth for faster device.
+  // Default: false
+  bool migrate_compaction = false;
+
+  // Set use_upd_table to true if you want to erase more invalid data 
+  // during compaction.
+  // Default: false
+  bool use_upd_table = false;
+  int upd_size = 64; // MB
+
   // This specifies the info LOG dir.
   // If it is empty, the log files will be in the same dir as data.
   // If it is non empty, the log files will be in the specified dir,

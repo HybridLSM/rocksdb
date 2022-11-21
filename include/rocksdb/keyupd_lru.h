@@ -1,8 +1,6 @@
-#ifndef STORAGE_LEVELDB_DB_KEYUPDLRU_H_
-#define STORAGE_LEVELDB_DB_KEYUPDLRU_H_
+#pragma once
 
 #include <string>
-
 #include "rocksdb/sst_score_table.h"
 #include "rocksdb/cache.h"
 #include "rocksdb/slice.h"
@@ -32,7 +30,7 @@ namespace ROCKSDB_NAMESPACE {
 		// add <key, SST_id> pair to updmap
 		// key is userkey
 		// if key already exists, the old SST_id score+1
-		void Add(Slice& key, uint64_t SST_id, ScoreTable* score_tbl) {
+		void Add(Slice& key, uint64_t SST_id, std::shared_ptr<ScoreTable> score_tbl) {
 			uint64_t* v_ptr = new uint64_t(SST_id);
 			Cache::Handle* handle = sstid_cache_->Lookup(key);
 			if (handle != nullptr) { //find key, so add score
@@ -76,6 +74,3 @@ namespace ROCKSDB_NAMESPACE {
 	};
 	
 }
-
-
-#endif

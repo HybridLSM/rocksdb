@@ -26,6 +26,7 @@
 #include "db/event_helpers.h"
 #include "db/external_sst_file_ingestion_job.h"
 #include "db/flush_job.h"
+// #include "db/flush_job_upd.h"
 #include "db/flush_scheduler.h"
 #include "db/import_column_family_job.h"
 #include "db/internal_stats.h"
@@ -46,6 +47,9 @@
 #include "monitoring/instrumented_mutex.h"
 #include "options/db_options.h"
 #include "port/port.h"
+#include "rocksdb/keyupd_lru.h"
+#include "rocksdb/sst_score_table.h"
+#include "rocksdb/counting_bloom_filter.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
 #include "rocksdb/memtablerep.h"
@@ -2230,6 +2234,10 @@ class DBImpl : public DB {
   bool wal_in_db_path_;
 
   BlobFileCompletionCallback blob_callback_;
+
+  std::shared_ptr<KeyUpdLru> keyupd_lru;
+  std::shared_ptr<ScoreTable> score_tbl;
+  std::shared_ptr<CountingBloomFilter> cbf;
 };
 
 extern Options SanitizeOptions(const std::string& db, const Options& src,

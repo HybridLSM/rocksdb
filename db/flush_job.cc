@@ -95,7 +95,9 @@ FlushJob::FlushJob(
     const bool sync_output_directory, const bool write_manifest,
     Env::Priority thread_pri, const std::shared_ptr<IOTracer>& io_tracer,
     const std::string& db_id, const std::string& db_session_id,
-    std::string full_history_ts_low, BlobFileCompletionCallback* blob_callback)
+    std::string full_history_ts_low, BlobFileCompletionCallback* blob_callback,
+    std::shared_ptr<KeyUpdLru> keyupd_lru_,
+    std::shared_ptr<ScoreTable> score_tbl_)
     : dbname_(dbname),
       db_id_(db_id),
       db_session_id_(db_session_id),
@@ -127,7 +129,9 @@ FlushJob::FlushJob(
       io_tracer_(io_tracer),
       clock_(db_options_.clock),
       full_history_ts_low_(std::move(full_history_ts_low)),
-      blob_callback_(blob_callback) {
+      blob_callback_(blob_callback),
+      keyupd_lru(keyupd_lru_),
+      score_tbl(score_tbl_) {
   // Update the thread status to indicate flush.
   ReportStartedFlush();
   TEST_SYNC_POINT("FlushJob::FlushJob()");
@@ -404,7 +408,7 @@ Status FlushJob::WriteLevel0Table() {
       IOStatus io_s;
       const std::string* const full_history_ts_low =
           (full_history_ts_low_.empty()) ? nullptr : &full_history_ts_low_;
-      s = BuildTable(
+      s = BuildTableWithUpd(
           dbname_, versions_, db_options_, *cfd_->ioptions(),
           mutable_cf_options_, file_options_, cfd_->table_cache(), iter.get(),
           std::move(range_del_iters), &meta_, &blob_file_additions,
@@ -416,7 +420,7 @@ Status FlushJob::WriteLevel0Table() {
           TableFileCreationReason::kFlush, &io_s, io_tracer_, event_logger_,
           job_context_->job_id, Env::IO_HIGH, &table_properties_, 0 /* level */,
           creation_time, oldest_key_time, write_hint, current_time, db_id_,
-          db_session_id_, full_history_ts_low, blob_callback_);
+          db_session_id_, full_history_ts_low, blob_callback_, keyupd_lru, score_tbl);
       if (!io_s.ok()) {
         io_status_ = io_s;
       }

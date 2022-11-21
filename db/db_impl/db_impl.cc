@@ -252,6 +252,18 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   co.metadata_charge_policy = kDontChargeCacheMetadata;
   table_cache_ = NewLRUCache(co);
 
+  if (options.use_upd_table) {
+    keyupd_lru = std::make_shared<KeyUpdLru>(options.upd_size << 20);
+  } else {
+    keyupd_lru = nullptr;
+  }
+
+  if (options.hot_aware) {
+    score_tbl = std::make_shared<ScoreTable>();    
+  } else {
+    score_tbl = nullptr;
+  }
+
   versions_.reset(new VersionSet(dbname_, &immutable_db_options_, file_options_,
                                  table_cache_.get(), write_buffer_manager_,
                                  &write_controller_, &block_cache_tracer_,
