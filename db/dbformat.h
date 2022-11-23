@@ -197,6 +197,15 @@ inline Slice ExtractUserKeyAndStripTimestamp(const Slice& internal_key,
                internal_key.size() - kNumInternalBytes - ts_sz);
 }
 
+inline uint64_t ExtractFileNumber(const Slice& key, size_t nb_sz = 8) {
+  return DecodeFixed64(key.data() + key.size() - nb_sz);
+}
+
+inline Slice StripFileNumber(const Slice& key, size_t nb_sz = 8) {
+  assert(key.size() >= nb_sz);
+  return Slice(key.data(), key.size() - nb_sz);
+}
+
 inline Slice StripTimestampFromUserKey(const Slice& user_key, size_t ts_sz) {
   assert(user_key.size() >= ts_sz);
   return Slice(user_key.data(), user_key.size() - ts_sz);

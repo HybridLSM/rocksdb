@@ -54,6 +54,7 @@
 #include "table/plain/plain_table_factory.h"
 #include "table/table_reader.h"
 #include "table/two_level_iterator.h"
+#include "table/iterator_with_number.h"
 #include "test_util/sync_point.h"
 #include "util/cast_util.h"
 #include "util/coding.h"
@@ -1250,6 +1251,383 @@ void LevelIterator::InitFileIterator(size_t new_file_index) {
     }
   }
 }
+
+class LevelIteratorWithNum final : public InternalIterator {
+ public:
+  // @param read_options Must outlive this iterator.
+  LevelIteratorWithNum(TableCache* table_cache, const ReadOptions& read_options,
+                const FileOptions& file_options,
+                const InternalKeyComparator& icomparator,
+                const LevelFilesBrief* flevel,
+                const SliceTransform* prefix_extractor, bool should_sample,
+                HistogramImpl* file_read_hist, TableReaderCaller caller,
+                bool skip_filters, int level, RangeDelAggregator* range_del_agg,
+                const std::vector<AtomicCompactionUnitBoundary>*
+                    compaction_boundaries = nullptr,
+                bool allow_unprepared_value = false)
+      : table_cache_(table_cache),
+        read_options_(read_options),
+        file_options_(file_options),
+        icomparator_(icomparator),
+        user_comparator_(icomparator.user_comparator()),
+        flevel_(flevel),
+        prefix_extractor_(prefix_extractor),
+        file_read_hist_(file_read_hist),
+        should_sample_(should_sample),
+        caller_(caller),
+        skip_filters_(skip_filters),
+        allow_unprepared_value_(allow_unprepared_value),
+        file_index_(flevel_->num_files),
+        level_(level),
+        range_del_agg_(range_del_agg),
+        pinned_iters_mgr_(nullptr),
+        compaction_boundaries_(compaction_boundaries) {
+    // Empty level is not supported.
+    assert(flevel_ != nullptr && flevel_->num_files > 0);
+  }
+
+  ~LevelIteratorWithNum() override { delete file_iter_.Set(nullptr); }
+
+  void Seek(const Slice& target) override;
+  void SeekForPrev(const Slice& target) override;
+  void SeekToFirst() override;
+  void SeekToLast() override;
+  void Next() final override;
+  bool NextAndGetResult(IterateResult* result) override;
+  void Prev() override;
+
+  bool Valid() const override { return file_iter_.Valid(); }
+  Slice key() const override {
+    assert(Valid());
+    return file_iter_.key();
+  }
+
+  Slice value() const override {
+    assert(Valid());
+    return file_iter_.value();
+  }
+
+  Status status() const override {
+    return file_iter_.iter() ? file_iter_.status() : Status::OK();
+  }
+
+  bool PrepareValue() override {
+    return file_iter_.PrepareValue();
+  }
+
+  inline bool MayBeOutOfLowerBound() override {
+    assert(Valid());
+    return may_be_out_of_lower_bound_ && file_iter_.MayBeOutOfLowerBound();
+  }
+
+  inline IterBoundCheck UpperBoundCheckResult() override {
+    if (Valid()) {
+      return file_iter_.UpperBoundCheckResult();
+    } else {
+      return IterBoundCheck::kUnknown;
+    }
+  }
+
+  void SetPinnedItersMgr(PinnedIteratorsManager* pinned_iters_mgr) override {
+    pinned_iters_mgr_ = pinned_iters_mgr;
+    if (file_iter_.iter()) {
+      file_iter_.SetPinnedItersMgr(pinned_iters_mgr);
+    }
+  }
+
+  bool IsKeyPinned() const override {
+    return pinned_iters_mgr_ && pinned_iters_mgr_->PinningEnabled() &&
+           file_iter_.iter() && file_iter_.IsKeyPinned();
+  }
+
+  bool IsValuePinned() const override {
+    return pinned_iters_mgr_ && pinned_iters_mgr_->PinningEnabled() &&
+           file_iter_.iter() && file_iter_.IsValuePinned();
+  }
+
+ private:
+  // Return true if at least one invalid file is seen and skipped.
+  bool SkipEmptyFileForward();
+  void SkipEmptyFileBackward();
+  void SetFileIterator(InternalIterator* iter);
+  void InitFileIterator(size_t new_file_index);
+
+  const Slice& file_smallest_key(size_t file_index) {
+    assert(file_index < flevel_->num_files);
+    return flevel_->files[file_index].smallest_key;
+  }
+
+  bool KeyReachedUpperBound(const Slice& internal_key) {
+    return read_options_.iterate_upper_bound != nullptr &&
+           user_comparator_.CompareWithoutTimestamp(
+               ExtractUserKey(internal_key), /*a_has_ts=*/true,
+               *read_options_.iterate_upper_bound, /*b_has_ts=*/false) >= 0;
+  }
+
+  InternalIterator* NewFileIterator() {
+    assert(file_index_ < flevel_->num_files);
+    auto file_meta = flevel_->files[file_index_];
+    if (should_sample_) {
+      sample_file_read_inc(file_meta.file_metadata);
+    }
+
+    const InternalKey* smallest_compaction_key = nullptr;
+    const InternalKey* largest_compaction_key = nullptr;
+    if (compaction_boundaries_ != nullptr) {
+      smallest_compaction_key = (*compaction_boundaries_)[file_index_].smallest;
+      largest_compaction_key = (*compaction_boundaries_)[file_index_].largest;
+    }
+    CheckMayBeOutOfLowerBound();
+    auto file_number = file_meta.fd.GetNumber();
+    // return iterator whose keys are with file number in last 8 bytes.
+    return NewIteratorWithFileNumber(file_number, 
+            table_cache_->NewIterator(
+          read_options_, file_options_, icomparator_, *file_meta.file_metadata,
+          range_del_agg_, prefix_extractor_,
+          nullptr /* don't need reference to table */, file_read_hist_, caller_,
+          /*arena=*/nullptr, skip_filters_, level_,
+          /*max_file_size_for_l0_meta_pin=*/0, smallest_compaction_key,
+          largest_compaction_key, allow_unprepared_value_));
+  }
+
+  // Check if current file being fully within iterate_lower_bound.
+  //
+  // Note MyRocks may update iterate bounds between seek. To workaround it,
+  // we need to check and update may_be_out_of_lower_bound_ accordingly.
+  void CheckMayBeOutOfLowerBound() {
+    if (read_options_.iterate_lower_bound != nullptr &&
+        file_index_ < flevel_->num_files) {
+      may_be_out_of_lower_bound_ =
+          user_comparator_.CompareWithoutTimestamp(
+              ExtractUserKey(file_smallest_key(file_index_)), /*a_has_ts=*/true,
+              *read_options_.iterate_lower_bound, /*b_has_ts=*/false) < 0;
+    }
+  }
+
+  TableCache* table_cache_;
+  const ReadOptions& read_options_;
+  const FileOptions& file_options_;
+  const InternalKeyComparator& icomparator_;
+  const UserComparatorWrapper user_comparator_;
+  const LevelFilesBrief* flevel_;
+  mutable FileDescriptor current_value_;
+  // `prefix_extractor_` may be non-null even for total order seek. Checking
+  // this variable is not the right way to identify whether prefix iterator
+  // is used.
+  const SliceTransform* prefix_extractor_;
+
+  HistogramImpl* file_read_hist_;
+  bool should_sample_;
+  TableReaderCaller caller_;
+  bool skip_filters_;
+  bool allow_unprepared_value_;
+  bool may_be_out_of_lower_bound_ = true;
+  size_t file_index_;
+  int level_;
+  RangeDelAggregator* range_del_agg_;
+  IteratorWrapper file_iter_;  // May be nullptr
+  PinnedIteratorsManager* pinned_iters_mgr_;
+
+  // To be propagated to RangeDelAggregator in order to safely truncate range
+  // tombstones.
+  const std::vector<AtomicCompactionUnitBoundary>* compaction_boundaries_;
+};
+
+void LevelIteratorWithNum::Seek(const Slice& target) {
+  // Check whether the seek key fall under the same file
+  bool need_to_reseek = true;
+  if (file_iter_.iter() != nullptr && file_index_ < flevel_->num_files) {
+    const FdWithKeyRange& cur_file = flevel_->files[file_index_];
+    if (icomparator_.InternalKeyComparator::Compare(
+            target, cur_file.largest_key) <= 0 &&
+        icomparator_.InternalKeyComparator::Compare(
+            target, cur_file.smallest_key) >= 0) {
+      need_to_reseek = false;
+      assert(static_cast<size_t>(FindFile(icomparator_, *flevel_, target)) ==
+             file_index_);
+    }
+  }
+  if (need_to_reseek) {
+    TEST_SYNC_POINT("LevelIteratorWithNum::Seek:BeforeFindFile");
+    size_t new_file_index = FindFile(icomparator_, *flevel_, target);
+    InitFileIterator(new_file_index);
+  }
+
+  if (file_iter_.iter() != nullptr) {
+    file_iter_.Seek(target);
+  }
+  if (SkipEmptyFileForward() && prefix_extractor_ != nullptr &&
+      !read_options_.total_order_seek && !read_options_.auto_prefix_mode &&
+      file_iter_.iter() != nullptr && file_iter_.Valid()) {
+    // We've skipped the file we initially positioned to. In the prefix
+    // seek case, it is likely that the file is skipped because of
+    // prefix bloom or hash, where more keys are skipped. We then check
+    // the current key and invalidate the iterator if the prefix is
+    // already passed.
+    // When doing prefix iterator seek, when keys for one prefix have
+    // been exhausted, it can jump to any key that is larger. Here we are
+    // enforcing a stricter contract than that, in order to make it easier for
+    // higher layers (merging and DB iterator) to reason the correctness:
+    // 1. Within the prefix, the result should be accurate.
+    // 2. If keys for the prefix is exhausted, it is either positioned to the
+    //    next key after the prefix, or make the iterator invalid.
+    // A side benefit will be that it invalidates the iterator earlier so that
+    // the upper level merging iterator can merge fewer child iterators.
+    size_t ts_sz = user_comparator_.timestamp_size();
+    Slice target_user_key_without_ts =
+        ExtractUserKeyAndStripTimestamp(target, ts_sz);
+    Slice file_user_key_without_ts =
+        ExtractUserKeyAndStripTimestamp(StripFileNumber(file_iter_.key()), ts_sz);
+    if (prefix_extractor_->InDomain(target_user_key_without_ts) &&
+        (!prefix_extractor_->InDomain(file_user_key_without_ts) ||
+         user_comparator_.CompareWithoutTimestamp(
+             prefix_extractor_->Transform(target_user_key_without_ts), false,
+             prefix_extractor_->Transform(file_user_key_without_ts),
+             false) != 0)) {
+      SetFileIterator(nullptr);
+    }
+  }
+  CheckMayBeOutOfLowerBound();
+}
+
+void LevelIteratorWithNum::SeekForPrev(const Slice& target) {
+  size_t new_file_index = FindFile(icomparator_, *flevel_, target);
+  if (new_file_index >= flevel_->num_files) {
+    new_file_index = flevel_->num_files - 1;
+  }
+
+  InitFileIterator(new_file_index);
+  if (file_iter_.iter() != nullptr) {
+    file_iter_.SeekForPrev(target);
+    SkipEmptyFileBackward();
+  }
+  CheckMayBeOutOfLowerBound();
+}
+
+void LevelIteratorWithNum::SeekToFirst() {
+  InitFileIterator(0);
+  if (file_iter_.iter() != nullptr) {
+    file_iter_.SeekToFirst();
+  }
+  SkipEmptyFileForward();
+  CheckMayBeOutOfLowerBound();
+}
+
+void LevelIteratorWithNum::SeekToLast() {
+  InitFileIterator(flevel_->num_files - 1);
+  if (file_iter_.iter() != nullptr) {
+    file_iter_.SeekToLast();
+  }
+  SkipEmptyFileBackward();
+  CheckMayBeOutOfLowerBound();
+}
+
+void LevelIteratorWithNum::Next() {
+  assert(Valid());
+  file_iter_.Next();
+  SkipEmptyFileForward();
+}
+
+bool LevelIteratorWithNum::NextAndGetResult(IterateResult* result) {
+  assert(Valid());
+  bool is_valid = file_iter_.NextAndGetResult(result);
+  if (!is_valid) {
+    SkipEmptyFileForward();
+    is_valid = Valid();
+    if (is_valid) {
+      result->key = StripFileNumber(key());
+      result->bound_check_result = file_iter_.UpperBoundCheckResult();
+      // Ideally, we should return the real file_iter_.value_prepared but the
+      // information is not here. It would casue an extra PrepareValue()
+      // for the first key of a file.
+      result->value_prepared = !allow_unprepared_value_;
+    }
+  }
+  return is_valid;
+}
+
+void LevelIteratorWithNum::Prev() {
+  assert(Valid());
+  file_iter_.Prev();
+  SkipEmptyFileBackward();
+}
+
+bool LevelIteratorWithNum::SkipEmptyFileForward() {
+  bool seen_empty_file = false;
+  while (file_iter_.iter() == nullptr ||
+         (!file_iter_.Valid() && file_iter_.status().ok() &&
+          file_iter_.iter()->UpperBoundCheckResult() !=
+              IterBoundCheck::kOutOfBound)) {
+    seen_empty_file = true;
+    // Move to next file
+    if (file_index_ >= flevel_->num_files - 1) {
+      // Already at the last file
+      SetFileIterator(nullptr);
+      break;
+    }
+    if (KeyReachedUpperBound(file_smallest_key(file_index_ + 1))) {
+      SetFileIterator(nullptr);
+      break;
+    }
+    InitFileIterator(file_index_ + 1);
+    if (file_iter_.iter() != nullptr) {
+      file_iter_.SeekToFirst();
+    }
+  }
+  return seen_empty_file;
+}
+
+void LevelIteratorWithNum::SkipEmptyFileBackward() {
+  while (file_iter_.iter() == nullptr ||
+         (!file_iter_.Valid() && file_iter_.status().ok())) {
+    // Move to previous file
+    if (file_index_ == 0) {
+      // Already the first file
+      SetFileIterator(nullptr);
+      return;
+    }
+    InitFileIterator(file_index_ - 1);
+    if (file_iter_.iter() != nullptr) {
+      file_iter_.SeekToLast();
+    }
+  }
+}
+
+void LevelIteratorWithNum::SetFileIterator(InternalIterator* iter) {
+  if (pinned_iters_mgr_ && iter) {
+    iter->SetPinnedItersMgr(pinned_iters_mgr_);
+  }
+
+  InternalIterator* old_iter = file_iter_.Set(iter);
+  if (pinned_iters_mgr_ && pinned_iters_mgr_->PinningEnabled()) {
+    pinned_iters_mgr_->PinIterator(old_iter);
+  } else {
+    delete old_iter;
+  }
+}
+
+void LevelIteratorWithNum::InitFileIterator(size_t new_file_index) {
+  if (new_file_index >= flevel_->num_files) {
+    file_index_ = new_file_index;
+    SetFileIterator(nullptr);
+    return;
+  } else {
+    // If the file iterator shows incomplete, we try it again if users seek
+    // to the same file, as this time we may go to a different data block
+    // which is cached in block cache.
+    //
+    if (file_iter_.iter() != nullptr && !file_iter_.status().IsIncomplete() &&
+        new_file_index == file_index_) {
+      // file_iter_ is already constructed with this iterator, so
+      // no need to change anything
+    } else {
+      file_index_ = new_file_index;
+      InternalIterator* iter = NewFileIterator();
+      SetFileIterator(iter);
+    }
+  }
+}
+
 }  // anonymous namespace
 
 Status Version::GetTableProperties(std::shared_ptr<const TableProperties>* tp,
@@ -5486,6 +5864,63 @@ InternalIterator* VersionSet::MakeInputIterator(
   delete[] list;
   return result;
 }
+
+InternalIterator* VersionSet::MakeInputIteratorWithNum(
+    const ReadOptions& read_options, const Compaction* c,
+    RangeDelAggregator* range_del_agg,
+    const FileOptions& file_options_compactions) {
+  auto cfd = c->column_family_data();
+  // Level-0 files have to be merged together.  For other levels,
+  // we will make a concatenating iterator per level.
+  // TODO(opt): use concatenating iterator for level-0 if there is no overlap
+  const size_t space = (c->level() == 0 ? c->input_levels(0)->num_files +
+                                              c->num_input_levels() - 1
+                                        : c->num_input_levels());
+  InternalIterator** list = new InternalIterator* [space];
+  size_t num = 0;
+  for (size_t which = 0; which < c->num_input_levels(); which++) {
+    if (c->input_levels(which)->num_files != 0) {
+      if (c->level(which) == 0) {
+        const LevelFilesBrief* flevel = c->input_levels(which);
+        for (size_t i = 0; i < flevel->num_files; i++) {
+          auto file_num = flevel->files[i].fd.GetNumber();
+          list[num++] = NewIteratorWithFileNumber(file_num, 
+              cfd->table_cache()->NewIterator(
+                read_options, file_options_compactions,
+                cfd->internal_comparator(), *flevel->files[i].file_metadata,
+                range_del_agg, c->mutable_cf_options()->prefix_extractor.get(),
+                /*table_reader_ptr=*/nullptr,
+                /*file_read_hist=*/nullptr, TableReaderCaller::kCompaction,
+                /*arena=*/nullptr,
+                /*skip_filters=*/false,
+                /*level=*/static_cast<int>(c->level(which)),
+                MaxFileSizeForL0MetaPin(*c->mutable_cf_options()),
+                /*smallest_compaction_key=*/nullptr,
+                /*largest_compaction_key=*/nullptr,
+                /*allow_unprepared_value=*/false));
+        }
+      } else {
+        // Create concatenating iterator for the files from this level
+        list[num++] = new LevelIteratorWithNum(
+            cfd->table_cache(), read_options, file_options_compactions,
+            cfd->internal_comparator(), c->input_levels(which),
+            c->mutable_cf_options()->prefix_extractor.get(),
+            /*should_sample=*/false,
+            /*no per level latency histogram=*/nullptr,
+            TableReaderCaller::kCompaction, /*skip_filters=*/false,
+            /*level=*/static_cast<int>(c->level(which)), range_del_agg,
+            c->boundaries(which));
+      }
+    }
+  }
+  assert(num <= space);
+  InternalIterator* result =
+      NewMergingIterator(&c->column_family_data()->internal_comparator(), list,
+                         static_cast<int>(num));
+  delete[] list;
+  return result;
+}
+
 
 // verify that the files listed in this compaction are present
 // in the current version

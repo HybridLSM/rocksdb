@@ -352,7 +352,8 @@ void CompactionIterator::NextFromInput() {
 
   while (!valid_ && input_->Valid() && !IsPausingManualCompaction() &&
          !IsShuttingDown()) {
-    key_ = input_->key();
+    auto file_num = ExtractFileNumber(input_->key());
+    key_ = StripFileNumber(input_->key());
     value_ = input_->value();
     iter_stats_.num_input_records++;
 

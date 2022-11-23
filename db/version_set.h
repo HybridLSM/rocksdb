@@ -1204,6 +1204,11 @@ class VersionSet {
       const ReadOptions& read_options, const Compaction* c,
       RangeDelAggregator* range_del_agg,
       const FileOptions& file_options_compactions);
+  
+  InternalIterator* MakeInputIteratorWithNum(
+      const ReadOptions& read_options, const Compaction* c,
+      RangeDelAggregator* range_del_agg,
+      const FileOptions& file_options_compactions);
 
   // Add all files listed in any live version to *live_table_files and
   // *live_blob_files. Note that these lists may contain duplicates.

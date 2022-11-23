@@ -155,6 +155,7 @@ class CompactionIterator {
   void Next();
 
   // Getters
+  const int& file_num() const {return file_num_;}
   const Slice& key() const { return key_; }
   const Slice& value() const { return value_; }
   const Status& status() const { return status_; }
@@ -280,6 +281,8 @@ class CompactionIterator {
 
   // State
   //
+  // Points to the file_number of SST that current key belongs to
+  int file_num_;
   // Points to a copy of the current compaction iterator output (current_key_)
   // if valid_.
   Slice key_;
