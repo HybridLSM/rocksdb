@@ -253,15 +253,17 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   table_cache_ = NewLRUCache(co);
 
   if (options.use_upd_table) {
+    score_tbl = std::make_shared<ScoreTable>();
     keyupd_lru = std::make_shared<KeyUpdLru>(options.upd_size << 20);
   } else {
+    score_tbl = nullptr;
     keyupd_lru = nullptr;
   }
 
   if (options.hot_aware) {
-    score_tbl = std::make_shared<ScoreTable>();    
+    cbf = std::make_shared<CountingBloomFilter>(4);    
   } else {
-    score_tbl = nullptr;
+    cbf = nullptr;
   }
 
   versions_.reset(new VersionSet(dbname_, &immutable_db_options_, file_options_,

@@ -311,7 +311,8 @@ CompactionJob::CompactionJob(
     Env::Priority thread_pri, const std::shared_ptr<IOTracer>& io_tracer,
     const std::atomic<int>* manual_compaction_paused, const std::string& db_id,
     const std::string& db_session_id, std::string full_history_ts_low,
-    BlobFileCompletionCallback* blob_callback)
+    BlobFileCompletionCallback* blob_callback,
+    std::shared_ptr<KeyUpdLru> keyupd_lru_)
     : job_id_(job_id),
       compact_(new CompactionState(compaction)),
       compaction_job_stats_(compaction_job_stats),
@@ -348,7 +349,8 @@ CompactionJob::CompactionJob(
       write_hint_(Env::WLTH_NOT_SET),
       thread_pri_(thread_pri),
       full_history_ts_low_(std::move(full_history_ts_low)),
-      blob_callback_(blob_callback) {
+      blob_callback_(blob_callback),
+      keyupd_lru(keyupd_lru_) {
   assert(compaction_job_stats_ != nullptr);
   assert(log_buffer_ != nullptr);
   const auto* cfd = compact_->compaction->column_family_data();
@@ -937,8 +939,12 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
 
   // Although the v2 aggregator is what the level iterator(s) know about,
   // the AddTombstones calls will be propagated down to the v1 aggregator.
+  // std::unique_ptr<InternalIterator> input(
+  //     versions_->MakeInputIterator(read_options, sub_compact->compaction,
+  //                                  &range_del_agg, file_options_for_read_));
+
   std::unique_ptr<InternalIterator> input(
-      versions_->MakeInputIterator(read_options, sub_compact->compaction,
+      versions_->MakeInputIteratorWithNum(read_options, sub_compact->compaction,
                                    &range_del_agg, file_options_for_read_));
 
   AutoThreadOperationStageUpdater stage_updater(
@@ -1016,7 +1022,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       blob_file_builder.get(), db_options_.allow_data_in_errors,
       sub_compact->compaction, compaction_filter, shutting_down_,
       preserve_deletes_seqnum_, manual_compaction_paused_, db_options_.info_log,
-      full_history_ts_low));
+      full_history_ts_low, keyupd_lru)); // add keyupd_lru
   auto c_iter = sub_compact->c_iter.get();
   c_iter->SeekToFirst();
   if (c_iter->Valid() && sub_compact->compaction->output_level() != 0) {

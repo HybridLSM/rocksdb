@@ -47,7 +47,8 @@ CompactionIterator::CompactionIterator(
     const SequenceNumber preserve_deletes_seqnum,
     const std::atomic<int>* manual_compaction_paused,
     const std::shared_ptr<Logger> info_log,
-    const std::string* full_history_ts_low)
+    const std::string* full_history_ts_low,
+    std::shared_ptr<KeyUpdLru> keyupd_lru_)
     : CompactionIterator(
           input, cmp, merge_helper, last_sequence, snapshots,
           earliest_write_conflict_snapshot, snapshot_checker, env,
@@ -72,7 +73,8 @@ CompactionIterator::CompactionIterator(
     const SequenceNumber preserve_deletes_seqnum,
     const std::atomic<int>* manual_compaction_paused,
     const std::shared_ptr<Logger> info_log,
-    const std::string* full_history_ts_low)
+    const std::string* full_history_ts_low,
+    std::shared_ptr<KeyUpdLru> keyupd_lru_)
     : input_(input),
       cmp_(cmp),
       merge_helper_(merge_helper),
@@ -100,7 +102,8 @@ CompactionIterator::CompactionIterator(
       blob_garbage_collection_cutoff_file_number_(
           ComputeBlobGarbageCollectionCutoffFileNumber(compaction_.get())),
       current_key_committed_(false),
-      cmp_with_history_ts_low_(0) {
+      cmp_with_history_ts_low_(0),
+      keyupd_lru(keyupd_lru_) {
   assert(compaction_filter_ == nullptr || compaction_ != nullptr);
   assert(snapshots_ != nullptr);
   bottommost_level_ = compaction_ == nullptr
@@ -349,7 +352,7 @@ bool CompactionIterator::InvokeFilterIfNeeded(bool* need_skip,
 void CompactionIterator::NextFromInput() {
   at_next_ = false;
   valid_ = false;
-
+  uint64_t newest_file_num;
   while (!valid_ && input_->Valid() && !IsPausingManualCompaction() &&
          !IsShuttingDown()) {
     auto file_num = ExtractFileNumber(input_->key());
@@ -786,6 +789,14 @@ void CompactionIterator::NextFromInput() {
           need_skip = true;
         }
       }
+    } else if (keyupd_lru != nullptr &&
+      keyupd_lru->FindSst(ikey_.user_key, &newest_file_num) && 
+      newest_file_num != file_num) {
+      // For the user key which in key_upd_lru and corresponding filenum
+      // is different from the input filenum, it means the key is outdate
+      // and can be dropped 
+      ++iter_stats_.num_record_drop_hidden;
+      input_->Next();
     } else {
       // 1. new user key -OR-
       // 2. different snapshot stripe

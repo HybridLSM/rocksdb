@@ -1,9 +1,9 @@
 #pragma once
 
 #include <string>
-#include "rocksdb/sst_score_table.h"
 #include "rocksdb/cache.h"
 #include "rocksdb/slice.h"
+#include "rocksdb/sst_score_table.h"
 
 
 namespace ROCKSDB_NAMESPACE {

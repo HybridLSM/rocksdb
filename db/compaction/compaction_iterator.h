@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "rocksdb/keyupd_lru.h"
 #include "db/compaction/compaction.h"
 #include "db/compaction/compaction_iteration_stats.h"
 #include "db/merge_helper.h"
@@ -120,7 +121,8 @@ class CompactionIterator {
                      const SequenceNumber preserve_deletes_seqnum = 0,
                      const std::atomic<int>* manual_compaction_paused = nullptr,
                      const std::shared_ptr<Logger> info_log = nullptr,
-                     const std::string* full_history_ts_low = nullptr);
+                     const std::string* full_history_ts_low = nullptr,
+                     std::shared_ptr<KeyUpdLru> keyupd_lru_ = nullptr);
 
   // Constructor with custom CompactionProxy, used for tests.
   CompactionIterator(InternalIterator* input, const Comparator* cmp,
@@ -138,7 +140,8 @@ class CompactionIterator {
                      const SequenceNumber preserve_deletes_seqnum = 0,
                      const std::atomic<int>* manual_compaction_paused = nullptr,
                      const std::shared_ptr<Logger> info_log = nullptr,
-                     const std::string* full_history_ts_low = nullptr);
+                     const std::string* full_history_ts_low = nullptr,
+                     std::shared_ptr<KeyUpdLru> keyupd_lru_ = nullptr);
 
   ~CompactionIterator();
 
@@ -155,7 +158,6 @@ class CompactionIterator {
   void Next();
 
   // Getters
-  const int& file_num() const {return file_num_;}
   const Slice& key() const { return key_; }
   const Slice& value() const { return value_; }
   const Status& status() const { return status_; }
@@ -281,8 +283,8 @@ class CompactionIterator {
 
   // State
   //
-  // Points to the file_number of SST that current key belongs to
-  int file_num_;
+  // keyupd_lru. Used for drop more invalid keys during compaction
+  std::shared_ptr<KeyUpdLru> keyupd_lru;
   // Points to a copy of the current compaction iterator output (current_key_)
   // if valid_.
   Slice key_;

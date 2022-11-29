@@ -34,6 +34,7 @@
 #include "options/cf_options.h"
 #include "options/db_options.h"
 #include "port/port.h"
+#include "rocksdb/keyupd_lru.h"
 #include "rocksdb/compaction_filter.h"
 #include "rocksdb/compaction_job_stats.h"
 #include "rocksdb/db.h"
@@ -82,7 +83,8 @@ class CompactionJob {
       const std::atomic<int>* manual_compaction_paused = nullptr,
       const std::string& db_id = "", const std::string& db_session_id = "",
       std::string full_history_ts_low = "",
-      BlobFileCompletionCallback* blob_callback = nullptr);
+      BlobFileCompletionCallback* blob_callback = nullptr,
+      std::shared_ptr<KeyUpdLru> keyupd_lru_ = nullptr);
 
   ~CompactionJob();
 
@@ -207,6 +209,8 @@ class CompactionJob {
   IOStatus io_status_;
   std::string full_history_ts_low_;
   BlobFileCompletionCallback* blob_callback_;
+
+  std::shared_ptr<KeyUpdLru> keyupd_lru;
 };
 
 }  // namespace ROCKSDB_NAMESPACE
