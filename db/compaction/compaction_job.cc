@@ -113,7 +113,7 @@ const char* GetCompactionReasonString(CompactionReason compaction_reason) {
 // Maintains state for each sub-compaction
 struct CompactionJob::SubcompactionState {
   const Compaction* compaction;
-  std::unique_ptr<CompactionIterator> c_iter;
+  std::unique_ptr<CompactionIteratorWithNum> c_iter;
 
   // The boundaries of the key-range this compaction is interested in. No two
   // subcompactions may have overlapping key-ranges.
@@ -1014,7 +1014,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   Status status;
   const std::string* const full_history_ts_low =
       full_history_ts_low_.empty() ? nullptr : &full_history_ts_low_;
-  sub_compact->c_iter.reset(new CompactionIterator(
+  sub_compact->c_iter.reset(new CompactionIteratorWithNum(
       input.get(), cfd->user_comparator(), &merge, versions_->LastSequence(),
       &existing_snapshots_, earliest_write_conflict_snapshot_,
       snapshot_checker_, env_, ShouldReportDetailedTime(env_, stats_),

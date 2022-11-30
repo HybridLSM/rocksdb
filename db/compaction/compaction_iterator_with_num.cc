@@ -3,7 +3,7 @@
 //  COPYING file in the root directory) and Apache 2.0 License
 //  (found in the LICENSE.Apache file in the root directory).
 
-#include "db/compaction/compaction_iterator.h"
+#include "db/compaction/compaction_iterator_with_num.h"
 
 #include <iterator>
 #include <limits>
@@ -34,7 +34,7 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-CompactionIterator::CompactionIterator(
+CompactionIteratorWithNum::CompactionIteratorWithNum(
     InternalIterator* input, const Comparator* cmp, MergeHelper* merge_helper,
     SequenceNumber last_sequence, std::vector<SequenceNumber>* snapshots,
     SequenceNumber earliest_write_conflict_snapshot,
@@ -47,8 +47,9 @@ CompactionIterator::CompactionIterator(
     const SequenceNumber preserve_deletes_seqnum,
     const std::atomic<int>* manual_compaction_paused,
     const std::shared_ptr<Logger> info_log,
-    const std::string* full_history_ts_low)
-    : CompactionIterator(
+    const std::string* full_history_ts_low,
+    std::shared_ptr<KeyUpdLru> keyupd_lru_)
+    : CompactionIteratorWithNum(
           input, cmp, merge_helper, last_sequence, snapshots,
           earliest_write_conflict_snapshot, snapshot_checker, env,
           report_detailed_time, expect_valid_internal_key, range_del_agg,
@@ -56,9 +57,9 @@ CompactionIterator::CompactionIterator(
           std::unique_ptr<CompactionProxy>(
               compaction ? new RealCompaction(compaction) : nullptr),
           compaction_filter, shutting_down, preserve_deletes_seqnum,
-          manual_compaction_paused, info_log, full_history_ts_low) {}
+          manual_compaction_paused, info_log, full_history_ts_low, keyupd_lru_) {}
 
-CompactionIterator::CompactionIterator(
+CompactionIteratorWithNum::CompactionIteratorWithNum(
     InternalIterator* input, const Comparator* cmp, MergeHelper* merge_helper,
     SequenceNumber /*last_sequence*/, std::vector<SequenceNumber>* snapshots,
     SequenceNumber earliest_write_conflict_snapshot,
@@ -72,7 +73,8 @@ CompactionIterator::CompactionIterator(
     const SequenceNumber preserve_deletes_seqnum,
     const std::atomic<int>* manual_compaction_paused,
     const std::shared_ptr<Logger> info_log,
-    const std::string* full_history_ts_low)
+    const std::string* full_history_ts_low,
+    std::shared_ptr<KeyUpdLru> keyupd_lru_)
     : input_(input),
       cmp_(cmp),
       merge_helper_(merge_helper),
@@ -100,7 +102,8 @@ CompactionIterator::CompactionIterator(
       blob_garbage_collection_cutoff_file_number_(
           ComputeBlobGarbageCollectionCutoffFileNumber(compaction_.get())),
       current_key_committed_(false),
-      cmp_with_history_ts_low_(0) {
+      cmp_with_history_ts_low_(0),
+      keyupd_lru(keyupd_lru_) {
   assert(compaction_filter_ == nullptr || compaction_ != nullptr);
   assert(snapshots_ != nullptr);
   bottommost_level_ = compaction_ == nullptr
@@ -131,15 +134,15 @@ CompactionIterator::CompactionIterator(
          timestamp_size_ == full_history_ts_low_->size());
 #endif
   input_->SetPinnedItersMgr(&pinned_iters_mgr_);
-  TEST_SYNC_POINT_CALLBACK("CompactionIterator:AfterInit", compaction_.get());
+  TEST_SYNC_POINT_CALLBACK("CompactionIteratorWithNum:AfterInit", compaction_.get());
 }
 
-CompactionIterator::~CompactionIterator() {
+CompactionIteratorWithNum::~CompactionIteratorWithNum() {
   // input_ Iterator lifetime is longer than pinned_iters_mgr_ lifetime
   input_->SetPinnedItersMgr(nullptr);
 }
 
-void CompactionIterator::ResetRecordCounts() {
+void CompactionIteratorWithNum::ResetRecordCounts() {
   iter_stats_.num_record_drop_user = 0;
   iter_stats_.num_record_drop_hidden = 0;
   iter_stats_.num_record_drop_obsolete = 0;
@@ -148,12 +151,12 @@ void CompactionIterator::ResetRecordCounts() {
   iter_stats_.num_optimized_del_drop_obsolete = 0;
 }
 
-void CompactionIterator::SeekToFirst() {
+void CompactionIteratorWithNum::SeekToFirst() {
   NextFromInput();
   PrepareOutput();
 }
 
-void CompactionIterator::Next() {
+void CompactionIteratorWithNum::Next() {
   // If there is a merge output, return it before continuing to process the
   // input.
   if (merge_out_iter_.Valid()) {
@@ -202,7 +205,7 @@ void CompactionIterator::Next() {
   PrepareOutput();
 }
 
-bool CompactionIterator::InvokeFilterIfNeeded(bool* need_skip,
+bool CompactionIteratorWithNum::InvokeFilterIfNeeded(bool* need_skip,
                                               Slice* skip_until) {
   if (!compaction_filter_ ||
       (ikey_.type != kTypeValue && ikey_.type != kTypeBlobIndex)) {
@@ -236,7 +239,7 @@ bool CompactionIterator::InvokeFilterIfNeeded(bool* need_skip,
           compaction_filter_skip_until_.rep());
       if (CompactionFilter::Decision::kUndetermined == filter &&
           !compaction_filter_->IsStackedBlobDbInternalCompactionFilter()) {
-        // For integrated BlobDB impl, CompactionIterator reads blob value.
+        // For integrated BlobDB impl, CompactionIteratorWithNum reads blob value.
         // For Stacked BlobDB impl, the corresponding CompactionFilter's
         // FilterV2 method should read the blob value.
         BlobIndex blob_index;
@@ -346,13 +349,14 @@ bool CompactionIterator::InvokeFilterIfNeeded(bool* need_skip,
   return !error;
 }
 
-void CompactionIterator::NextFromInput() {
+void CompactionIteratorWithNum::NextFromInput() {
   at_next_ = false;
   valid_ = false;
-
+  uint64_t newest_file_num;
   while (!valid_ && input_->Valid() && !IsPausingManualCompaction() &&
          !IsShuttingDown()) {
-    key_ = input_->key();
+    auto file_num = ExtractFileNumber(input_->key());
+    key_ = StripFileNumber(input_->key());
     value_ = input_->value();
     iter_stats_.num_input_records++;
 
@@ -373,7 +377,7 @@ void CompactionIterator::NextFromInput() {
       valid_ = true;
       break;
     }
-    TEST_SYNC_POINT_CALLBACK("CompactionIterator:ProcessKV", &ikey_);
+    TEST_SYNC_POINT_CALLBACK("CompactionIteratorWithNum:ProcessKV", &ikey_);
 
     // Update input statistics
     if (ikey_.type == kTypeDeletion || ikey_.type == kTypeSingleDeletion ||
@@ -785,6 +789,14 @@ void CompactionIterator::NextFromInput() {
           need_skip = true;
         }
       }
+    } else if (keyupd_lru != nullptr &&
+      keyupd_lru->FindSst(ikey_.user_key, &newest_file_num) && 
+      newest_file_num != file_num) {
+      // For the user key which in key_upd_lru and corresponding filenum
+      // is different from the input filenum, it means the key is outdate
+      // and can be dropped 
+      ++iter_stats_.num_record_drop_hidden;
+      input_->Next();
     } else {
       // 1. new user key -OR-
       // 2. different snapshot stripe
@@ -813,7 +825,7 @@ void CompactionIterator::NextFromInput() {
   }
 }
 
-bool CompactionIterator::ExtractLargeValueIfNeededImpl() {
+bool CompactionIteratorWithNum::ExtractLargeValueIfNeededImpl() {
   if (!blob_file_builder_) {
     return false;
   }
@@ -837,7 +849,7 @@ bool CompactionIterator::ExtractLargeValueIfNeededImpl() {
   return true;
 }
 
-void CompactionIterator::ExtractLargeValueIfNeeded() {
+void CompactionIteratorWithNum::ExtractLargeValueIfNeeded() {
   assert(ikey_.type == kTypeValue);
 
   if (!ExtractLargeValueIfNeededImpl()) {
@@ -848,7 +860,7 @@ void CompactionIterator::ExtractLargeValueIfNeeded() {
   current_key_.UpdateInternalKey(ikey_.sequence, ikey_.type);
 }
 
-void CompactionIterator::GarbageCollectBlobIfNeeded() {
+void CompactionIteratorWithNum::GarbageCollectBlobIfNeeded() {
   assert(ikey_.type == kTypeBlobIndex);
 
   if (!compaction_) {
@@ -943,7 +955,7 @@ void CompactionIterator::GarbageCollectBlobIfNeeded() {
   }
 }
 
-void CompactionIterator::PrepareOutput() {
+void CompactionIteratorWithNum::PrepareOutput() {
   if (valid_) {
     if (ikey_.type == kTypeValue) {
       ExtractLargeValueIfNeeded();
@@ -989,7 +1001,7 @@ void CompactionIterator::PrepareOutput() {
   }
 }
 
-inline SequenceNumber CompactionIterator::findEarliestVisibleSnapshot(
+inline SequenceNumber CompactionIteratorWithNum::findEarliestVisibleSnapshot(
     SequenceNumber in, SequenceNumber* prev_snapshot) {
   assert(snapshots_->size());
   if (snapshots_->size() == 0) {
@@ -1036,12 +1048,12 @@ inline SequenceNumber CompactionIterator::findEarliestVisibleSnapshot(
 
 // used in 2 places - prevents deletion markers to be dropped if they may be
 // needed and disables seqnum zero-out in PrepareOutput for recent keys.
-inline bool CompactionIterator::ikeyNotNeededForIncrementalSnapshot() {
+inline bool CompactionIteratorWithNum::ikeyNotNeededForIncrementalSnapshot() {
   return (!compaction_->preserve_deletes()) ||
          (ikey_.sequence < preserve_deletes_seqnum_);
 }
 
-bool CompactionIterator::IsInEarliestSnapshot(SequenceNumber sequence) {
+bool CompactionIteratorWithNum::IsInEarliestSnapshot(SequenceNumber sequence) {
   assert(snapshot_checker_ != nullptr);
   bool pre_condition = (earliest_snapshot_ == kMaxSequenceNumber ||
                         (earliest_snapshot_iter_ != snapshots_->end() &&
@@ -1076,7 +1088,7 @@ bool CompactionIterator::IsInEarliestSnapshot(SequenceNumber sequence) {
   return in_snapshot == SnapshotCheckerResult::kInSnapshot;
 }
 
-uint64_t CompactionIterator::ComputeBlobGarbageCollectionCutoffFileNumber(
+uint64_t CompactionIteratorWithNum::ComputeBlobGarbageCollectionCutoffFileNumber(
     const CompactionProxy* compaction) {
   if (!compaction) {
     return 0;

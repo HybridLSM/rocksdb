@@ -19,7 +19,7 @@
 
 #include "db/blob/blob_file_completion_callback.h"
 #include "db/column_family.h"
-#include "db/compaction/compaction_iterator.h"
+#include "db/compaction/compaction_iterator_with_num.h"
 #include "db/dbformat.h"
 #include "db/flush_scheduler.h"
 #include "db/internal_stats.h"

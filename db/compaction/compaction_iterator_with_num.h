@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "rocksdb/keyupd_lru.h"
 #include "db/compaction/compaction.h"
 #include "db/compaction/compaction_iteration_stats.h"
 #include "db/merge_helper.h"
@@ -24,10 +25,10 @@ namespace ROCKSDB_NAMESPACE {
 
 class BlobFileBuilder;
 
-class CompactionIterator {
+class CompactionIteratorWithNum {
  public:
   // A wrapper around Compaction. Has a much smaller interface, only what
-  // CompactionIterator uses. Tests can override it.
+  // CompactionIteratorWithNum uses. Tests can override it.
   class CompactionProxy {
    public:
     virtual ~CompactionProxy() = default;
@@ -105,7 +106,7 @@ class CompactionIterator {
     const Compaction* compaction_;
   };
 
-  CompactionIterator(InternalIterator* input, const Comparator* cmp,
+  CompactionIteratorWithNum(InternalIterator* input, const Comparator* cmp,
                      MergeHelper* merge_helper, SequenceNumber last_sequence,
                      std::vector<SequenceNumber>* snapshots,
                      SequenceNumber earliest_write_conflict_snapshot,
@@ -120,10 +121,11 @@ class CompactionIterator {
                      const SequenceNumber preserve_deletes_seqnum = 0,
                      const std::atomic<int>* manual_compaction_paused = nullptr,
                      const std::shared_ptr<Logger> info_log = nullptr,
-                     const std::string* full_history_ts_low = nullptr);
+                     const std::string* full_history_ts_low = nullptr,
+                     std::shared_ptr<KeyUpdLru> keyupd_lru_ = nullptr);
 
   // Constructor with custom CompactionProxy, used for tests.
-  CompactionIterator(InternalIterator* input, const Comparator* cmp,
+  CompactionIteratorWithNum(InternalIterator* input, const Comparator* cmp,
                      MergeHelper* merge_helper, SequenceNumber last_sequence,
                      std::vector<SequenceNumber>* snapshots,
                      SequenceNumber earliest_write_conflict_snapshot,
@@ -138,9 +140,10 @@ class CompactionIterator {
                      const SequenceNumber preserve_deletes_seqnum = 0,
                      const std::atomic<int>* manual_compaction_paused = nullptr,
                      const std::shared_ptr<Logger> info_log = nullptr,
-                     const std::string* full_history_ts_low = nullptr);
+                     const std::string* full_history_ts_low = nullptr,
+                     std::shared_ptr<KeyUpdLru> keyupd_lru_ = nullptr);
 
-  ~CompactionIterator();
+  ~CompactionIteratorWithNum();
 
   void ResetRecordCounts();
 
@@ -280,6 +283,8 @@ class CompactionIterator {
 
   // State
   //
+  // keyupd_lru. Used for drop more invalid keys during compaction
+  std::shared_ptr<KeyUpdLru> keyupd_lru;
   // Points to a copy of the current compaction iterator output (current_key_)
   // if valid_.
   Slice key_;

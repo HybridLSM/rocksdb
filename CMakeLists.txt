@@ -585,6 +585,7 @@ set(SOURCES
         db/column_family.cc
         db/compaction/compaction.cc
         db/compaction/compaction_iterator.cc
+        db/compaction/compaction_iterator_with_num.cc
         db/compaction/compaction_picker.cc
         db/compaction/compaction_job.cc
         db/compaction/compaction_picker_fifo.cc
