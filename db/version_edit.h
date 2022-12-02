@@ -180,6 +180,8 @@ struct FileMetaData {
   uint64_t raw_key_size = 0;    // total uncompressed key size.
   uint64_t raw_value_size = 0;  // total uncompressed value size.
 
+  FileArea area = fNormal;  // whether cur file is hot, warm or cold(narmal)
+
   int refs = 0;  // Reference count
 
   bool being_compacted = false;       // Is this file undergoing compaction?
@@ -216,7 +218,8 @@ struct FileMetaData {
                const SequenceNumber& largest_seq, bool marked_for_compact,
                uint64_t oldest_blob_file, uint64_t _oldest_ancester_time,
                uint64_t _file_creation_time, const std::string& _file_checksum,
-               const std::string& _file_checksum_func_name)
+               const std::string& _file_checksum_func_name,
+               FileArea _area)
       : fd(file, file_path_id, file_size, smallest_seq, largest_seq),
         smallest(smallest_key),
         largest(largest_key),
@@ -225,7 +228,8 @@ struct FileMetaData {
         oldest_ancester_time(_oldest_ancester_time),
         file_creation_time(_file_creation_time),
         file_checksum(_file_checksum),
-        file_checksum_func_name(_file_checksum_func_name) {
+        file_checksum_func_name(_file_checksum_func_name),
+        area(_area) {
     TEST_SYNC_POINT_CALLBACK("FileMetaData::FileMetaData", this);
   }
 
@@ -392,19 +396,20 @@ class VersionEdit {
                const SequenceNumber& largest_seqno, bool marked_for_compaction,
                uint64_t oldest_blob_file_number, uint64_t oldest_ancester_time,
                uint64_t file_creation_time, const std::string& file_checksum,
-               const std::string& file_checksum_func_name) {
+               const std::string& file_checksum_func_name,
+               FileArea area = FileArea::fNormal) {
     assert(smallest_seqno <= largest_seqno);
     new_files_.emplace_back(
         level, FileMetaData(file, file_path_id, file_size, smallest, largest,
                             smallest_seqno, largest_seqno,
                             marked_for_compaction, oldest_blob_file_number,
                             oldest_ancester_time, file_creation_time,
-                            file_checksum, file_checksum_func_name));
+                            file_checksum, file_checksum_func_name, area));
   }
 
   void AddFile(int level, const FileMetaData& f) {
     assert(f.fd.smallest_seqno <= f.fd.largest_seqno);
-    new_files_.emplace_back(level, f);
+    new_files_.emplace_back(level, f); 
   }
 
   // Retrieve the table files added as well as their associated levels.

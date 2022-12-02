@@ -36,6 +36,13 @@ namespace ROCKSDB_NAMESPACE {
 
 class InternalKey;
 
+enum FileArea {
+  fUnKnown = -0x1, 
+  fNormal = 0x0, 
+  fHot = 0x10, 
+  fWarm = 0x11
+};
+
 // Value types encoded as the last component of internal keys.
 // DO NOT CHANGE THESE ENUM VALUES: they are embedded in the on-disk
 // data structures.

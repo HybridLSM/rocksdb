@@ -124,6 +124,8 @@ class VersionStorageInfo {
   ~VersionStorageInfo();
 
   void Reserve(int level, size_t size) { files_[level].reserve(size); }
+  void ReserveHot(size_t size) { hot_files_.reserve(size); }
+  void ReserveWarm(size_t size) { warm_files_.reserve(size); }
 
   void AddFile(int level, FileMetaData* f);
 
@@ -287,6 +289,14 @@ class VersionStorageInfo {
   // REQUIRES: This version has been saved (see VersionSet::SaveTo)
   const std::vector<FileMetaData*>& LevelFiles(int level) const {
     return files_[level];
+  }
+
+  const std::vector<FileMetaData*>& HotLevelFiles() const {
+    return hot_files_;
+  }
+
+  const std::vector<FileMetaData*>& WarmLevelFiles() const {
+    return warm_files_;
   }
 
   class FileLocation {
@@ -522,6 +532,8 @@ class VersionStorageInfo {
   std::vector<uint64_t> level_max_bytes_;
 
   // A short brief metadata of files per level
+  // including hot and warm area files in level 
+  // FileArea::fHot and FileArea::fWarm
   autovector<ROCKSDB_NAMESPACE::LevelFilesBrief> level_files_brief_;
   FileIndexer file_indexer_;
   Arena arena_;  // Used to allocate space for file_levels_
@@ -531,6 +543,8 @@ class VersionStorageInfo {
   // List of files per level, files in each level are arranged
   // in increasing order of keys
   std::vector<FileMetaData*>* files_;
+  std::vector<FileMetaData*> hot_files_;
+  std::vector<FileMetaData*> warm_files_;
 
   // Map of all table files in version. Maps file number to (level, position on
   // level).

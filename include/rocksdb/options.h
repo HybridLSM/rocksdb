@@ -520,6 +520,8 @@ struct DBOptions {
   // db_paths. 
   // Default: false
   bool hot_aware = false;
+  int hot_thres = 12;
+  int warm_thres = 8;
 
   // Use this if you want to migrate SSTs in faster device to slower device
   // before compaction, in order to save bandwidth for faster device.

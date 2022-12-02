@@ -35,6 +35,7 @@
 #include "options/db_options.h"
 #include "port/port.h"
 #include "rocksdb/keyupd_lru.h"
+#include "rocksdb/counting_bloom_filter.h"
 #include "rocksdb/compaction_filter.h"
 #include "rocksdb/compaction_job_stats.h"
 #include "rocksdb/db.h"
@@ -84,7 +85,8 @@ class CompactionJob {
       const std::string& db_id = "", const std::string& db_session_id = "",
       std::string full_history_ts_low = "",
       BlobFileCompletionCallback* blob_callback = nullptr,
-      std::shared_ptr<KeyUpdLru> keyupd_lru_ = nullptr);
+      std::shared_ptr<KeyUpdLru> keyupd_lru_ = nullptr,
+      std::shared_ptr<CountingBloomFilter> cbf_ = nullptr);
 
   ~CompactionJob();
 
@@ -133,9 +135,21 @@ class CompactionJob {
       CompactionRangeDelAggregator* range_del_agg,
       CompactionIterationStats* range_del_out_stats,
       const Slice* next_table_min_key = nullptr);
+  Status FinishCompactionOutputFileHot(
+      const Status& input_status, SubcompactionState* sub_compact,
+      CompactionRangeDelAggregator* range_del_agg,
+      CompactionIterationStats* range_del_out_stats,
+      const Slice* next_table_min_key = nullptr);
+  Status FinishCompactionOutputFileWarm(
+      const Status& input_status, SubcompactionState* sub_compact,
+      CompactionRangeDelAggregator* range_del_agg,
+      CompactionIterationStats* range_del_out_stats,
+      const Slice* next_table_min_key = nullptr);
   Status InstallCompactionResults(const MutableCFOptions& mutable_cf_options);
   void RecordCompactionIOStats();
   Status OpenCompactionOutputFile(SubcompactionState* sub_compact);
+  Status OpenCompactionOutputFileHot(SubcompactionState* sub_compact);
+  Status OpenCompactionOutputFileWarm(SubcompactionState* sub_compact);
   void CleanupCompaction();
   void UpdateCompactionJobStats(
     const InternalStats::CompactionStats& stats) const;
@@ -211,6 +225,7 @@ class CompactionJob {
   BlobFileCompletionCallback* blob_callback_;
 
   std::shared_ptr<KeyUpdLru> keyupd_lru;
+  std::shared_ptr<CountingBloomFilter> cbf;
 };
 
 }  // namespace ROCKSDB_NAMESPACE
