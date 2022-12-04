@@ -21,6 +21,7 @@ namespace ROCKSDB_NAMESPACE {
 	class KeyUpdLru {
 	private:
 		std::shared_ptr<Cache> sstid_cache_;
+		std::shared_mutex mutex_;
 	public:
 		KeyUpdLru(const int kCacheSize) : sstid_cache_(NewLRUCache(kCacheSize)) {
 
@@ -31,6 +32,7 @@ namespace ROCKSDB_NAMESPACE {
 		// key is userkey
 		// if key already exists, the old SST_id score+1
 		void Add(Slice& key, uint64_t SST_id, std::shared_ptr<ScoreTable> score_tbl) {
+			std::unique_lock<std::shared_mutex> lock(mutex_);
 			uint64_t* v_ptr = new uint64_t(SST_id);
 			Cache::Handle* handle = sstid_cache_->Lookup(key);
 			if (handle != nullptr) { //find key, so add score
@@ -43,6 +45,7 @@ namespace ROCKSDB_NAMESPACE {
 		}
 
 		bool CompareAndUpdateSst(const Slice& key, uint64_t old_id, uint64_t new_id) {
+			std::unique_lock<std::shared_mutex> lock(mutex_);
 			bool successful = false;
 			Cache::Handle* handle = sstid_cache_->Lookup(key);
 			if (handle != nullptr) { //find key
@@ -59,7 +62,7 @@ namespace ROCKSDB_NAMESPACE {
 		}
 
 		bool FindSst(const Slice& key, uint64_t* value) {
-
+			std::shared_lock<std::shared_mutex> lock(mutex_);
 			Cache::Handle* handle = sstid_cache_->Lookup(key);
 			if (handle != nullptr) { //find key
 				uint64_t* id_ptr = reinterpret_cast<uint64_t*>(sstid_cache_->Value(handle));

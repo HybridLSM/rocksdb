@@ -1046,15 +1046,14 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     const Slice& key = c_iter->key();
     const Slice& value = c_iter->value();
 
-    // if (keyupd_lru != nullptr) {
-    //   uint64_t newest_file_num;
-    //   keyupd_lru->FindSst(c_iter->user_key(), &newest_file_num);
-    //   bool newest = c_iter->file_num() == newest_file_num;
-    //   if (!newest) {
-    //     c_iter->Next();
-    //     continue;
-    //   }
-    // }
+    if (keyupd_lru != nullptr) {
+      uint64_t newest_file_num;
+      bool found = keyupd_lru->FindSst(c_iter->user_key(), &newest_file_num);
+      if (found && c_iter->file_num() != newest_file_num) {
+        c_iter->Next();
+        continue;
+      }
+    }
     
     // If an end key (exclusive) is specified, check if the current key is
     // >= than it and exit if it is because the iterator is out of its range
