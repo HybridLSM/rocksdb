@@ -42,7 +42,7 @@ namespace ROCKSDB_NAMESPACE {
 			sstid_cache_->Insert(key, EncodeValue(v_ptr), 1, DeleteValue);
 		}
 
-		bool CompareAndUpdateSst(Slice& key, uint64_t old_id, uint64_t new_id) {
+		bool CompareAndUpdateSst(const Slice& key, uint64_t old_id, uint64_t new_id) {
 			bool successful = false;
 			Cache::Handle* handle = sstid_cache_->Lookup(key);
 			if (handle != nullptr) { //find key

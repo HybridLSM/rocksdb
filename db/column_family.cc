@@ -511,6 +511,7 @@ ColumnFamilyData::ColumnFamilyData(
       initialized_(false),
       dropped_(false),
       internal_comparator_(cf_options.comparator),
+      internal_comparator_with_num_(&internal_comparator_),
       initial_cf_options_(SanitizeOptions(db_options, cf_options)),
       ioptions_(db_options, initial_cf_options_),
       mutable_cf_options_(initial_cf_options_),

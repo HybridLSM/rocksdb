@@ -428,6 +428,10 @@ class ColumnFamilyData {
     return internal_comparator_;
   }
 
+  const InternalKeyComparator* internal_comparator_with_num() const {
+    return &internal_comparator_with_num_;
+  }
+
   const std::vector<std::unique_ptr<IntTblPropCollectorFactory>>*
   int_tbl_prop_collector_factories() const {
     return &int_tbl_prop_collector_factories_;
@@ -548,6 +552,7 @@ class ColumnFamilyData {
   std::atomic<bool> dropped_;  // true if client dropped it
 
   const InternalKeyComparator internal_comparator_;
+  const InternalKeyComparatorWithNum internal_comparator_with_num_;
   std::vector<std::unique_ptr<IntTblPropCollectorFactory>>
       int_tbl_prop_collector_factories_;
 

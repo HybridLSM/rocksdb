@@ -30,7 +30,14 @@ class InternalIteratorWithFileNumber : public InternalIterator {
 		Slice value () const override { return data_iter_->value(); }
 
 		bool NextAndGetResult(IterateResult* result) {
-			return data_iter_->NextAndGetResult(result);
+			bool ret = data_iter_->NextAndGetResult(result);
+			if (ret) {
+				Slice data_key = result->key;
+				memcpy(key_buf, data_key.data(), data_key.size());
+				EncodeFixed64(key_buf + data_key.size(), file_number_);
+				result->key = Slice(key_buf, data_key.size() + 8);
+			}
+			return ret;
 		}
 		bool PrepareValue() {return data_iter_->PrepareValue();}
 		bool MayBeOutOfLowerBound() {return data_iter_->MayBeOutOfLowerBound();}

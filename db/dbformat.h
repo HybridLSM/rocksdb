@@ -283,6 +283,146 @@ class InternalKeyComparator
   }
 };
 
+// Wrapper of user comparator, with auto increment to
+// perf_context.user_key_comparison_count.
+class InternalComparatorWrapper final : public InternalKeyComparator {
+ public:
+  // `UserComparatorWrapper`s constructed with the default constructor are not
+  // usable and will segfault on any attempt to use them for comparisons.
+  InternalComparatorWrapper() : internal_comparator_(nullptr) {}
+
+  explicit InternalComparatorWrapper(const InternalKeyComparator* const internal_cmp)
+      : InternalKeyComparator(internal_cmp), internal_comparator_(internal_cmp) {}
+
+  ~InternalComparatorWrapper() = default;
+
+  const InternalKeyComparator* internal_comparator() const { return internal_comparator_; }
+
+  int Compare(const Slice& a, const Slice& b) const override {
+    PERF_COUNTER_ADD(user_key_comparison_count, 1);
+    const Slice& i_a = StripFileNumber(a);
+    const Slice& i_b = StripFileNumber(b);
+    return internal_comparator_->Compare(i_a, i_b);
+  }
+
+  bool Equal(const Slice& a, const Slice& b) const override {
+    PERF_COUNTER_ADD(user_key_comparison_count, 1);
+    const Slice& i_a = StripFileNumber(a);
+    const Slice& i_b = StripFileNumber(b);
+    return internal_comparator_->Equal(i_a, i_b);
+  }
+
+  const char* Name() const override { return internal_comparator_->Name(); }
+
+  // todo 
+  void FindShortestSeparator(std::string* start,
+                             const Slice& limit) const override {
+    return internal_comparator_->FindShortestSeparator(start, limit);
+  }
+
+  // todo 
+  void FindShortSuccessor(std::string* key) const override {
+    return internal_comparator_->FindShortSuccessor(key);
+  }
+
+  // todo 
+  const Comparator* GetRootComparator() const override {
+    return internal_comparator_->GetRootComparator();
+  }
+
+  // todo 
+  bool IsSameLengthImmediateSuccessor(const Slice& s,
+                                      const Slice& t) const override {
+    return internal_comparator_->IsSameLengthImmediateSuccessor(s, t);
+  }
+  
+  // todo 
+  bool CanKeysWithDifferentByteContentsBeEqual() const override {
+    return internal_comparator_->CanKeysWithDifferentByteContentsBeEqual();
+  }
+
+  // todo 
+  int CompareTimestamp(const Slice& ts1, const Slice& ts2) const override {
+    return internal_comparator_->CompareTimestamp(ts1, ts2);
+  }
+
+  using Comparator::CompareWithoutTimestamp;
+  int CompareWithoutTimestamp(const Slice& a, bool a_has_ts, const Slice& b,
+                              bool b_has_ts) const override {
+    PERF_COUNTER_ADD(user_key_comparison_count, 1);
+    const Slice& i_a = StripFileNumber(a);
+    const Slice& i_b = StripFileNumber(b);
+    return internal_comparator_->CompareWithoutTimestamp(i_a, a_has_ts, i_b, b_has_ts);
+  }
+
+  bool EqualWithoutTimestamp(const Slice& a, const Slice& b) const override {
+    const Slice& i_a = StripFileNumber(a);
+    const Slice& i_b = StripFileNumber(b);
+    return internal_comparator_->EqualWithoutTimestamp(i_a, i_b);
+  }
+
+ private:
+  const InternalKeyComparator* internal_comparator_;
+};
+
+// A comparator for internal keys with filenum 
+class InternalKeyComparatorWithNum
+#ifdef NDEBUG
+    final
+#endif
+    : public InternalKeyComparator {
+ private:
+  InternalComparatorWrapper internal_comparator_;
+  std::string name_;
+
+ public:
+  // `InternalKeyComparatorWithNum`s constructed with the default constructor are not
+  // usable and will segfault on any attempt to use them for comparisons.
+  InternalKeyComparatorWithNum() = default;
+
+  // @param named If true, assign a name to this comparator based on the
+  //    underlying comparator's name. This involves an allocation and copy in
+  //    this constructor to precompute the result of `Name()`. To avoid this
+  //    overhead, set `named` to false. In that case, `Name()` will return a
+  //    generic name that is non-specific to the underlying comparator.
+  explicit InternalKeyComparatorWithNum(const InternalKeyComparator* c, bool named = true)
+      : internal_comparator_(c) {
+    if (named) {
+      name_ = "rocksdb.InternalKeyComparatorWithNum:" +
+              std::string(internal_comparator_.Name());
+    }
+  }
+  virtual ~InternalKeyComparatorWithNum() {}
+
+  virtual const char* Name() const override;
+  virtual int Compare(const Slice& a, const Slice& b) const override {
+    return internal_comparator_.Compare(a, b);
+  }
+  // Same as Compare except that it excludes the value type from comparison
+  virtual int CompareKeySeq(const Slice& a, const Slice& b) const override {
+    return internal_comparator_.Compare(a, b);
+  }
+  virtual void FindShortestSeparator(std::string* start,
+                                     const Slice& limit) const override;
+  virtual void FindShortSuccessor(std::string* key) const override;
+
+  const InternalKeyComparator* internal_comparator() const {
+    return internal_comparator_.internal_comparator();
+  }
+
+  int Compare(const InternalKey& a, const InternalKey& b) const;
+  int Compare(const ParsedInternalKey& a, const ParsedInternalKey& b) const;
+  // In this `Compare()` overload, the sequence numbers provided in
+  // `a_global_seqno` and `b_global_seqno` override the sequence numbers in `a`
+  // and `b`, respectively. To disable sequence number override(s), provide the
+  // value `kDisableGlobalSequenceNumber`.
+  int Compare(const Slice& a, SequenceNumber a_global_seqno, const Slice& b,
+              SequenceNumber b_global_seqno) const;
+  virtual const Comparator* GetRootComparator() const override {
+    return internal_comparator_.GetRootComparator();
+  }
+};
+
 // The class represent the internal key in encoded form.
 class InternalKey {
  private:

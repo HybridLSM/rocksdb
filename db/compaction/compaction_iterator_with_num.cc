@@ -356,6 +356,7 @@ void CompactionIteratorWithNum::NextFromInput() {
   while (!valid_ && input_->Valid() && !IsPausingManualCompaction() &&
          !IsShuttingDown()) {
     auto file_num = ExtractFileNumber(input_->key());
+    file_num_ = file_num;
     key_ = StripFileNumber(input_->key());
     value_ = input_->value();
     iter_stats_.num_input_records++;
@@ -562,7 +563,7 @@ void CompactionIteratorWithNum::NextFromInput() {
       // Check whether the next key exists, is not corrupt, and is the same key
       // as the single delete.
       if (input_->Valid() &&
-          ParseInternalKey(input_->key(), &next_ikey, allow_data_in_errors_)
+          ParseInternalKey(StripFileNumber(input_->key()), &next_ikey, allow_data_in_errors_)
               .ok() &&
           cmp_->Equal(ikey_.user_key, next_ikey.user_key)) {
         // Check whether the next key belongs to the same snapshot as the
@@ -724,7 +725,7 @@ void CompactionIteratorWithNum::NextFromInput() {
       // than *full_history_ts_low_.
       while (!IsPausingManualCompaction() && !IsShuttingDown() &&
              input_->Valid() &&
-             (ParseInternalKey(input_->key(), &next_ikey, allow_data_in_errors_)
+             (ParseInternalKey(StripFileNumber(input_->key()), &next_ikey, allow_data_in_errors_)
                   .ok()) &&
              cmp_->EqualWithoutTimestamp(ikey_.user_key, next_ikey.user_key) &&
              (prev_snapshot == 0 ||
@@ -734,7 +735,7 @@ void CompactionIteratorWithNum::NextFromInput() {
       // If you find you still need to output a row with this key, we need to output the
       // delete too
       if (input_->Valid() &&
-          (ParseInternalKey(input_->key(), &next_ikey, allow_data_in_errors_)
+          (ParseInternalKey(StripFileNumber(input_->key()), &next_ikey, allow_data_in_errors_)
                .ok()) &&
           cmp_->EqualWithoutTimestamp(ikey_.user_key, next_ikey.user_key)) {
         valid_ = true;
@@ -789,14 +790,6 @@ void CompactionIteratorWithNum::NextFromInput() {
           need_skip = true;
         }
       }
-    } else if (keyupd_lru != nullptr &&
-      keyupd_lru->FindSst(ikey_.user_key, &newest_file_num) && 
-      newest_file_num != file_num) {
-      // For the user key which in key_upd_lru and corresponding filenum
-      // is different from the input filenum, it means the key is outdate
-      // and can be dropped 
-      ++iter_stats_.num_record_drop_hidden;
-      input_->Next();
     } else {
       // 1. new user key -OR-
       // 2. different snapshot stripe

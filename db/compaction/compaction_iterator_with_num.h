@@ -158,6 +158,7 @@ class CompactionIteratorWithNum {
   void Next();
 
   // Getters
+  const int& file_num() const {return file_num_;}
   const Slice& key() const { return key_; }
   const Slice& value() const { return value_; }
   const Status& status() const { return status_; }
@@ -285,6 +286,7 @@ class CompactionIteratorWithNum {
   //
   // keyupd_lru. Used for drop more invalid keys during compaction
   std::shared_ptr<KeyUpdLru> keyupd_lru;
+  int file_num_; // key_'s corresponding file number
   // Points to a copy of the current compaction iterator output (current_key_)
   // if valid_.
   Slice key_;

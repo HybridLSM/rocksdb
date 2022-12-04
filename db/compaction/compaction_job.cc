@@ -1046,6 +1046,16 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     const Slice& key = c_iter->key();
     const Slice& value = c_iter->value();
 
+    // if (keyupd_lru != nullptr) {
+    //   uint64_t newest_file_num;
+    //   keyupd_lru->FindSst(c_iter->user_key(), &newest_file_num);
+    //   bool newest = c_iter->file_num() == newest_file_num;
+    //   if (!newest) {
+    //     c_iter->Next();
+    //     continue;
+    //   }
+    // }
+    
     // If an end key (exclusive) is specified, check if the current key is
     // >= than it and exit if it is because the iterator is out of its range
     if (end != nullptr &&
@@ -1070,7 +1080,11 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     if (!status.ok()) {
       break;
     }
-
+    if (keyupd_lru != nullptr) {
+      auto cur_filenum = sub_compact->current_output()->meta.fd.GetNumber();
+      keyupd_lru->CompareAndUpdateSst(c_iter->user_key(), 
+                                          c_iter->file_num(), cur_filenum);
+    }
     sub_compact->current_output_file_size =
         sub_compact->builder->EstimatedFileSize();
     const ParsedInternalKey& ikey = c_iter->ikey();

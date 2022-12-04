@@ -1535,7 +1535,7 @@ bool LevelIteratorWithNum::NextAndGetResult(IterateResult* result) {
     SkipEmptyFileForward();
     is_valid = Valid();
     if (is_valid) {
-      result->key = StripFileNumber(key());
+      result->key = key();
       result->bound_check_result = file_iter_.UpperBoundCheckResult();
       // Ideally, we should return the real file_iter_.value_prepared but the
       // information is not here. It would casue an extra PrepareValue()
@@ -5915,7 +5915,7 @@ InternalIterator* VersionSet::MakeInputIteratorWithNum(
   }
   assert(num <= space);
   InternalIterator* result =
-      NewMergingIterator(&c->column_family_data()->internal_comparator(), list,
+      NewMergingIterator(c->column_family_data()->internal_comparator_with_num(), list,
                          static_cast<int>(num));
   delete[] list;
   return result;

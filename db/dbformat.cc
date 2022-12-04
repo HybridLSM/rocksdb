@@ -184,6 +184,69 @@ void InternalKeyComparator::FindShortSuccessor(std::string* key) const {
   }
 }
 
+const char* InternalKeyComparatorWithNum::Name() const {
+  if (name_.empty()) {
+    return "rocksdb.anonymous.InternalKeyComparatorWithNum";
+  }
+  return name_.c_str();
+}
+
+int InternalKeyComparatorWithNum::Compare(const ParsedInternalKey& a,
+                                   const ParsedInternalKey& b) const {
+  // Order by:
+  //    increasing user key (according to user-supplied comparator)
+  //    decreasing sequence number
+  //    decreasing type (though sequence# should be enough to disambiguate)
+  printf("InternalKeyComparatorWithNum::Compare ParsedInternalKey\n");
+  int r = internal_comparator_.Compare(a.user_key, b.user_key);
+  if (r == 0) {
+    if (a.sequence > b.sequence) {
+      r = -1;
+    } else if (a.sequence < b.sequence) {
+      r = +1;
+    } else if (a.type > b.type) {
+      r = -1;
+    } else if (a.type < b.type) {
+      r = +1;
+    }
+  }
+  return r;
+}
+
+void InternalKeyComparatorWithNum::FindShortestSeparator(std::string* start,
+                                                  const Slice& limit) const {
+  // Attempt to shorten the user portion of the key
+  Slice user_start = ExtractUserKey(*start);
+  Slice user_limit = ExtractUserKey(limit);
+  std::string tmp(user_start.data(), user_start.size());
+  internal_comparator_.FindShortestSeparator(&tmp, user_limit);
+  if (tmp.size() <= user_start.size() &&
+      internal_comparator_.Compare(user_start, tmp) < 0) {
+    // User key has become shorter physically, but larger logically.
+    // Tack on the earliest possible number to the shortened user key.
+    PutFixed64(&tmp,
+               PackSequenceAndType(kMaxSequenceNumber, kValueTypeForSeek));
+    assert(this->Compare(*start, tmp) < 0);
+    assert(this->Compare(tmp, limit) < 0);
+    start->swap(tmp);
+  }
+}
+
+void InternalKeyComparatorWithNum::FindShortSuccessor(std::string* key) const {
+  Slice user_key = ExtractUserKey(*key);
+  std::string tmp(user_key.data(), user_key.size());
+  internal_comparator_.FindShortSuccessor(&tmp);
+  if (tmp.size() <= user_key.size() &&
+      internal_comparator_.Compare(user_key, tmp) < 0) {
+    // User key has become shorter physically, but larger logically.
+    // Tack on the earliest possible number to the shortened user key.
+    PutFixed64(&tmp,
+               PackSequenceAndType(kMaxSequenceNumber, kValueTypeForSeek));
+    assert(this->Compare(*key, tmp) < 0);
+    key->swap(tmp);
+  }
+}
+
 LookupKey::LookupKey(const Slice& _user_key, SequenceNumber s,
                      const Slice* ts) {
   size_t usize = _user_key.size();
