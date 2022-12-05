@@ -355,6 +355,311 @@ class FilePicker {
   }
 };
 
+class FilePickerWithHW {
+ public:
+  FilePickerWithHW(std::vector<FileMetaData*>* files, 
+             std::vector<FileMetaData*>& hot_files,
+             std::vector<FileMetaData*>& warm_files,
+             const Slice& user_key,
+             const Slice& ikey, autovector<LevelFilesBrief>* file_levels,
+             unsigned int num_levels, FileIndexer* file_indexer,
+             const Comparator* user_comparator,
+             const InternalKeyComparator* internal_comparator)
+      : num_levels_(num_levels),
+        curr_level_(static_cast<unsigned int>(-1)),
+        returned_file_level_(static_cast<unsigned int>(-1)),
+        hit_file_level_(static_cast<unsigned int>(-1)),
+        search_left_bound_(0),
+        search_right_bound_(FileIndexer::kLevelMaxIndex),
+        search_hot_ended(false),
+        search_warm_ended(false),
+#ifndef NDEBUG
+        files_(files),
+        hot_files_(hot_files),
+        warm_files_(warm_files),
+#endif
+        level_files_brief_(file_levels),
+        is_hit_file_last_in_level_(false),
+        curr_file_level_(nullptr),
+        user_key_(user_key),
+        ikey_(ikey),
+        file_indexer_(file_indexer),
+        user_comparator_(user_comparator),
+        internal_comparator_(internal_comparator) {
+#ifdef NDEBUG
+    (void)files;
+#endif
+    // Setup member variables to search first level.
+    search_ended_ = !PrepareNextLevel();
+    if (!search_ended_) {
+      // Prefetch Level 0 table data to avoid cache miss if possible.
+      for (unsigned int i = 0; i < (*level_files_brief_)[0].num_files; ++i) {
+        auto* r = (*level_files_brief_)[0].files[i].fd.table_reader;
+        if (r) {
+          r->Prepare(ikey);
+        }
+      }
+    }
+  }
+
+  int GetCurrentLevel() const { return curr_level_; }
+
+  FdWithKeyRange* GetNextFile() {
+    while (!search_ended_) {  // Loops over different levels.
+      while (curr_index_in_curr_level_ < curr_file_level_->num_files) {
+        // Loops over all files in current level.
+        FdWithKeyRange* f = &curr_file_level_->files[curr_index_in_curr_level_];
+        // hit_file_level_ = curr_level_;
+        hit_file_level_ = actual_level_;
+        is_hit_file_last_in_level_ =
+            curr_index_in_curr_level_ == curr_file_level_->num_files - 1;
+        int cmp_largest = -1;
+
+        // Do key range filtering of files or/and fractional cascading if:
+        // (1) not all the files are in level 0, or
+        // (2) there are more than 3 current level files
+        // If there are only 3 or less current level files in the system, we skip
+        // the key range filtering. In this case, more likely, the system is
+        // highly tuned to minimize number of tables queried by each query,
+        // so it is unlikely that key range filtering is more efficient than
+        // querying the files.
+        if (num_levels_ > 1 || curr_file_level_->num_files > 3) {
+          // Check if key is within a file's range. If search left bound and
+          // right bound point to the same find, we are sure key falls in
+          // range.
+          assert(curr_level_ == 0 ||
+                 curr_index_in_curr_level_ == start_index_in_curr_level_ ||
+                 user_comparator_->CompareWithoutTimestamp(
+                     user_key_, ExtractUserKey(f->smallest_key)) <= 0);
+
+          int cmp_smallest = user_comparator_->CompareWithoutTimestamp(
+              user_key_, ExtractUserKey(f->smallest_key));
+          if (cmp_smallest >= 0) {
+            cmp_largest = user_comparator_->CompareWithoutTimestamp(
+                user_key_, ExtractUserKey(f->largest_key));
+          }
+
+          // Setup file search bound for the next level based on the
+          // comparison results
+          if (curr_level_ > 0) {
+            file_indexer_->GetNextLevelIndex(curr_level_,
+                                            curr_index_in_curr_level_,
+                                            cmp_smallest, cmp_largest,
+                                            &search_left_bound_,
+                                            &search_right_bound_);
+          }
+          // Key falls out of current file's range
+          if (cmp_smallest < 0 || cmp_largest > 0) {
+            if (curr_level_ == 0) {
+              ++curr_index_in_curr_level_;
+              continue;
+            } else {
+              // Search next level.
+              break;
+            }
+          }
+        }
+#ifndef NDEBUG
+        // Sanity check to make sure that the files are correctly sorted
+        if (prev_file_) {
+          if (curr_level_ != 0 && 
+              (actual_level_ != FileArea::fHot || actual_level_ != FileArea::fWarm)) {
+            int comp_sign = internal_comparator_->Compare(
+                prev_file_->largest_key, f->smallest_key);
+            assert(comp_sign < 0);
+          } else {
+            // level == 0, the current file cannot be newer than the previous
+            // one. Use compressed data structure, has no attribute seqNo
+            assert(curr_index_in_curr_level_ > 0);
+            assert(!NewestFirstBySeqNo(files_[0][curr_index_in_curr_level_],
+                  files_[0][curr_index_in_curr_level_-1]));
+          }
+        }
+        prev_file_ = f;
+#endif
+        // returned_file_level_ = curr_level_;
+        returned_file_level_ = actual_level_; // in case of hot and warm area
+        if (curr_level_ > 0 && cmp_largest < 0 && 
+          (actual_level_ != FileArea::fHot || actual_level_ != FileArea::fWarm) ) {
+          // No more files to search in this level.
+          search_ended_ = !PrepareNextLevel();
+        } else {
+          ++curr_index_in_curr_level_;
+        }
+        return f;
+      }
+      // Start searching next level.
+      search_ended_ = !PrepareNextLevel();
+    }
+    // Search ended.
+    return nullptr;
+  }
+
+  // getter for current file level
+  // for GET_HIT_L0, GET_HIT_L1 & GET_HIT_L2_AND_UP counts
+  unsigned int GetHitFileLevel() { return hit_file_level_; }
+
+  // Returns true if the most recent "hit file" (i.e., one returned by
+  // GetNextFile()) is at the last index in its level.
+  bool IsHitFileLastInLevel() { return is_hit_file_last_in_level_; }
+
+ private:
+  unsigned int num_levels_;
+  unsigned int curr_level_;
+  unsigned int actual_level_;// in case of hot and warm area
+  unsigned int returned_file_level_;
+  unsigned int hit_file_level_;
+  int32_t search_left_bound_;
+  int32_t search_right_bound_;
+  bool search_hot_ended;
+  bool search_warm_ended;
+#ifndef NDEBUG
+  std::vector<FileMetaData*>* files_;
+  std::vector<FileMetaData*> hot_files_;
+  std::vector<FileMetaData*> warm_files_;
+#endif
+  autovector<LevelFilesBrief>* level_files_brief_;
+  bool search_ended_;
+  bool is_hit_file_last_in_level_;
+  LevelFilesBrief* curr_file_level_;
+  unsigned int curr_index_in_curr_level_;
+  unsigned int start_index_in_curr_level_;
+  Slice user_key_;
+  Slice ikey_;
+  FileIndexer* file_indexer_;
+  const Comparator* user_comparator_;
+  const InternalKeyComparator* internal_comparator_;
+#ifndef NDEBUG
+  FdWithKeyRange* prev_file_;
+#endif
+
+  // Setup local variables to search next level.
+  // Returns false if there are no more levels to search.
+  bool PrepareNextLevel() {
+    curr_level_++;
+    while (curr_level_ < num_levels_) {
+      // before search L0, search hot files first
+      if (curr_level_ == 1 && !search_hot_ended) {
+        search_hot_ended = true;
+        curr_file_level_ = &(*level_files_brief_)[FileArea::fHot]; // hot files
+        actual_level_ = FileArea::fHot;
+        if (curr_file_level_->num_files == 0) {
+          // When current level is empty, the search bound generated from upper
+          // level must be [0, -1] or [0, FileIndexer::kLevelMaxIndex] if it is
+          // also empty.
+          assert(search_left_bound_ == 0);
+          assert(search_right_bound_ == -1 ||
+                search_right_bound_ == FileIndexer::kLevelMaxIndex);
+          // Since current level is empty, it will need to search all files in
+          // the next level
+          search_left_bound_ = 0;
+          search_right_bound_ = FileIndexer::kLevelMaxIndex;
+          continue;
+        } else {
+          //On hot area, we read through all files to check for overlap.
+          int32_t start_index = 0;
+          start_index_in_curr_level_ = start_index;
+          curr_index_in_curr_level_ = start_index;
+          return true;
+        }
+      } else if (curr_level_ == 2 && !search_warm_ended) {
+        search_warm_ended = true;
+        curr_file_level_ = &(*level_files_brief_)[FileArea::fWarm]; // warm files
+        actual_level_ = FileArea::fWarm;
+        if (curr_file_level_->num_files == 0) {
+          // When current level is empty, the search bound generated from upper
+          // level must be [0, -1] or [0, FileIndexer::kLevelMaxIndex] if it is
+          // also empty.
+          assert(search_left_bound_ == 0);
+          assert(search_right_bound_ == -1 ||
+                search_right_bound_ == FileIndexer::kLevelMaxIndex);
+          // Since current level is empty, it will need to search all files in
+          // the next level
+          search_left_bound_ = 0;
+          search_right_bound_ = FileIndexer::kLevelMaxIndex;
+          continue;
+        } else {
+          //On warm area, we read through all files to check for overlap.
+          int32_t start_index = 0;
+          start_index_in_curr_level_ = start_index;
+          curr_index_in_curr_level_ = start_index;
+          return true;
+        }
+      }
+      curr_file_level_ = &(*level_files_brief_)[curr_level_];
+      actual_level_ = curr_level_;
+      if (curr_file_level_->num_files == 0) {
+        // When current level is empty, the search bound generated from upper
+        // level must be [0, -1] or [0, FileIndexer::kLevelMaxIndex] if it is
+        // also empty.
+        assert(search_left_bound_ == 0);
+        assert(search_right_bound_ == -1 ||
+               search_right_bound_ == FileIndexer::kLevelMaxIndex);
+        // Since current level is empty, it will need to search all files in
+        // the next level
+        search_left_bound_ = 0;
+        search_right_bound_ = FileIndexer::kLevelMaxIndex;
+        curr_level_++;
+        continue;
+      }
+
+      // Some files may overlap each other. We find
+      // all files that overlap user_key and process them in order from
+      // newest to oldest. In the context of merge-operator, this can occur at
+      // any level. Otherwise, it only occurs at Level-0 (since Put/Deletes
+      // are always compacted into a single entry).
+      int32_t start_index;
+      if (curr_level_ == 0) {
+        // On Level-0, we read through all files to check for overlap.
+        start_index = 0;
+      } else {
+        // On Level-n (n>=1), files are sorted. Binary search to find the
+        // earliest file whose largest key >= ikey. Search left bound and
+        // right bound are used to narrow the range.
+        if (search_left_bound_ <= search_right_bound_) {
+          if (search_right_bound_ == FileIndexer::kLevelMaxIndex) {
+            search_right_bound_ =
+                static_cast<int32_t>(curr_file_level_->num_files) - 1;
+          }
+          // `search_right_bound_` is an inclusive upper-bound, but since it was
+          // determined based on user key, it is still possible the lookup key
+          // falls to the right of `search_right_bound_`'s corresponding file.
+          // So, pass a limit one higher, which allows us to detect this case.
+          start_index =
+              FindFileInRange(*internal_comparator_, *curr_file_level_, ikey_,
+                              static_cast<uint32_t>(search_left_bound_),
+                              static_cast<uint32_t>(search_right_bound_) + 1);
+          if (start_index == search_right_bound_ + 1) {
+            // `ikey_` comes after `search_right_bound_`. The lookup key does
+            // not exist on this level, so let's skip this level and do a full
+            // binary search on the next level.
+            search_left_bound_ = 0;
+            search_right_bound_ = FileIndexer::kLevelMaxIndex;
+            curr_level_++;
+            continue;
+          }
+        } else {
+          // search_left_bound > search_right_bound, key does not exist in
+          // this level. Since no comparison is done in this level, it will
+          // need to search all files in the next level.
+          search_left_bound_ = 0;
+          search_right_bound_ = FileIndexer::kLevelMaxIndex;
+          curr_level_++;
+          continue;
+        }
+      }
+      start_index_in_curr_level_ = start_index;
+      curr_index_in_curr_level_ = start_index;
+#ifndef NDEBUG
+      prev_file_ = nullptr;
+#endif
+      return true;
+    }
+    // curr_level_ = num_levels_. So, no more levels to search.
+    return false;
+  }
+};
+
 class FilePickerMultiGet {
  private:
   struct FilePickerContext;
@@ -2267,8 +2572,13 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
     pinned_iters_mgr.StartPinning();
   }
 
-  FilePicker fp(
-      storage_info_.files_, user_key, ikey, &storage_info_.level_files_brief_,
+  // FilePicker fp(
+  //     storage_info_.files_, user_key, ikey, &storage_info_.level_files_brief_,
+  //     storage_info_.num_non_empty_levels_, &storage_info_.file_indexer_,
+  //     user_comparator(), internal_comparator());
+  FilePickerWithHW fp(
+      storage_info_.files_, storage_info_.hot_files_, storage_info_.warm_files_, 
+      user_key, ikey, &storage_info_.level_files_brief_,
       storage_info_.num_non_empty_levels_, &storage_info_.file_indexer_,
       user_comparator(), internal_comparator());
   FdWithKeyRange* f = fp.GetNextFile();
@@ -2644,11 +2954,18 @@ bool Version::IsFilterSkipped(int level, bool is_file_last_in_level) {
 }
 
 void VersionStorageInfo::GenerateLevelFilesBrief() {
-  level_files_brief_.resize(num_non_empty_levels_);
+  // level_files_brief_.resize(num_non_empty_levels_);
+  // num_non_empty_levels_ should not be greater than fhot
+  assert(num_non_empty_levels_ <= FileArea::fHot);
+  level_files_brief_.resize(FileArea::fWarm + 1);
   for (int level = 0; level < num_non_empty_levels_; level++) {
     DoGenerateLevelFilesBrief(
         &level_files_brief_[level], files_[level], &arena_);
   }
+  DoGenerateLevelFilesBrief(
+        &level_files_brief_[FileArea::fHot], hot_files_, &arena_);
+  DoGenerateLevelFilesBrief(
+        &level_files_brief_[FileArea::fWarm], warm_files_, &arena_);
 }
 
 void Version::PrepareApply(
@@ -3173,16 +3490,37 @@ bool CompareCompensatedSizeDescending(const Fsize& first, const Fsize& second) {
 } // anonymous namespace
 
 void VersionStorageInfo::AddFile(int level, FileMetaData* f) {
-  auto& level_files = files_[level];
-  level_files.push_back(f);
+  if (level == FileArea::fHot) {
+    auto& level_files = hot_files_;
+    level_files.push_back(f);
+    f->refs++;
 
-  f->refs++;
+    const uint64_t file_number = f->fd.GetNumber();
 
-  const uint64_t file_number = f->fd.GetNumber();
+    assert(file_locations_.find(file_number) == file_locations_.end());
+    file_locations_.emplace(file_number,
+                            FileLocation(level, level_files.size() - 1));
+  } else if (level == FileArea::fWarm) {
+    auto& level_files = warm_files_;
+    level_files.push_back(f);
+    f->refs++;
 
-  assert(file_locations_.find(file_number) == file_locations_.end());
-  file_locations_.emplace(file_number,
-                          FileLocation(level, level_files.size() - 1));
+    const uint64_t file_number = f->fd.GetNumber();
+
+    assert(file_locations_.find(file_number) == file_locations_.end());
+    file_locations_.emplace(file_number,
+                            FileLocation(level, level_files.size() - 1));
+  } else {
+    auto& level_files = files_[level];
+    level_files.push_back(f);
+    f->refs++;
+
+    const uint64_t file_number = f->fd.GetNumber();
+
+    assert(file_locations_.find(file_number) == file_locations_.end());
+    file_locations_.emplace(file_number,
+                            FileLocation(level, level_files.size() - 1));
+  }
 }
 
 void VersionStorageInfo::AddBlobFile(

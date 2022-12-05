@@ -173,6 +173,8 @@ class VersionBuilder::Rep {
   VersionSet* version_set_;
   int num_levels_;
   LevelState* levels_;
+  LevelState hot_level_;
+  LevelState warm_level_;
   // Store sizes of levels larger than num_levels_. We do this instead of
   // storing them in levels_ to avoid regression in case there are no files
   // on invalid levels. The version is not consistent if in the end the files
@@ -540,7 +542,7 @@ class VersionBuilder::Rep {
       return Status::Corruption("VersionBuilder", oss.str());
     }
 
-    if (level >= num_levels_) {
+    if (level >= num_levels_ && (level != FileArea::fHot || level != FileArea::fWarm)) {
       assert(invalid_level_sizes_[level] > 0);
       --invalid_level_sizes_[level];
 
@@ -557,19 +559,48 @@ class VersionBuilder::Rep {
         IsBlobFileInVersion(blob_file_number)) {
       blob_file_meta_deltas_[blob_file_number].UnlinkSst(file_number);
     }
+    //hot files
+    if (level == FileArea::fHot){
+      auto& level_state = hot_level_;
 
-    auto& level_state = levels_[level];
+      auto& add_files = level_state.added_files;
+      auto add_it = add_files.find(file_number);
+      if (add_it != add_files.end()) {
+        UnrefFile(add_it->second);
+        add_files.erase(add_it);
+      }
 
-    auto& add_files = level_state.added_files;
-    auto add_it = add_files.find(file_number);
-    if (add_it != add_files.end()) {
-      UnrefFile(add_it->second);
-      add_files.erase(add_it);
+      auto& del_files = level_state.deleted_files;
+      assert(del_files.find(file_number) == del_files.end());
+      del_files.emplace(file_number);
+    } else if (level == FileArea::fWarm) {
+      auto& level_state = warm_level_;
+
+      auto& add_files = level_state.added_files;
+      auto add_it = add_files.find(file_number);
+      if (add_it != add_files.end()) {
+        UnrefFile(add_it->second);
+        add_files.erase(add_it);
+      }
+
+      auto& del_files = level_state.deleted_files;
+      assert(del_files.find(file_number) == del_files.end());
+      del_files.emplace(file_number);
+    } else {
+      auto& level_state = levels_[level];
+
+      auto& add_files = level_state.added_files;
+      auto add_it = add_files.find(file_number);
+      if (add_it != add_files.end()) {
+        UnrefFile(add_it->second);
+        add_files.erase(add_it);
+      }
+
+      auto& del_files = level_state.deleted_files;
+      assert(del_files.find(file_number) == del_files.end());
+      del_files.emplace(file_number);
     }
-
-    auto& del_files = level_state.deleted_files;
-    assert(del_files.find(file_number) == del_files.end());
-    del_files.emplace(file_number);
+    
 
     table_file_levels_[file_number] =
         VersionStorageInfo::FileLocation::Invalid().GetLevel();
@@ -586,7 +617,7 @@ class VersionBuilder::Rep {
 
     if (current_level !=
         VersionStorageInfo::FileLocation::Invalid().GetLevel()) {
-      if (level >= num_levels_) {
+      if (level >= num_levels_  && (level != FileArea::fHot || level != FileArea::fWarm)) {
         has_invalid_levels_ = true;
       }
 
@@ -596,34 +627,82 @@ class VersionBuilder::Rep {
       return Status::Corruption("VersionBuilder", oss.str());
     }
 
-    if (level >= num_levels_) {
+    if (level >= num_levels_ && (level != FileArea::fHot || level != FileArea::fWarm)) {
       ++invalid_level_sizes_[level];
       table_file_levels_[file_number] = level;
 
       return Status::OK();
     }
 
-    auto& level_state = levels_[level];
+    //hot files
+    if (level == FileArea::fHot) {
+      auto& level_state = hot_level_;
 
-    auto& del_files = level_state.deleted_files;
-    auto del_it = del_files.find(file_number);
-    if (del_it != del_files.end()) {
-      del_files.erase(del_it);
+      auto& del_files = level_state.deleted_files;
+      auto del_it = del_files.find(file_number);
+      if (del_it != del_files.end()) {
+        del_files.erase(del_it);
+      }
+
+      FileMetaData* const f = new FileMetaData(meta);
+      f->refs = 1;
+
+      auto& add_files = level_state.added_files;
+      assert(add_files.find(file_number) == add_files.end());
+      add_files.emplace(file_number, f);
+
+      const uint64_t blob_file_number = f->oldest_blob_file_number;
+
+      if (blob_file_number != kInvalidBlobFileNumber &&
+          IsBlobFileInVersion(blob_file_number)) {
+        blob_file_meta_deltas_[blob_file_number].LinkSst(file_number);
+      }
+    } else if (level == FileArea::fWarm) {
+      auto& level_state = warm_level_;
+
+      auto& del_files = level_state.deleted_files;
+      auto del_it = del_files.find(file_number);
+      if (del_it != del_files.end()) {
+        del_files.erase(del_it);
+      }
+
+      FileMetaData* const f = new FileMetaData(meta);
+      f->refs = 1;
+
+      auto& add_files = level_state.added_files;
+      assert(add_files.find(file_number) == add_files.end());
+      add_files.emplace(file_number, f);
+
+      const uint64_t blob_file_number = f->oldest_blob_file_number;
+
+      if (blob_file_number != kInvalidBlobFileNumber &&
+          IsBlobFileInVersion(blob_file_number)) {
+        blob_file_meta_deltas_[blob_file_number].LinkSst(file_number);
+      }
+    } else {
+      auto& level_state = levels_[level];
+
+      auto& del_files = level_state.deleted_files;
+      auto del_it = del_files.find(file_number);
+      if (del_it != del_files.end()) {
+        del_files.erase(del_it);
+      }
+
+      FileMetaData* const f = new FileMetaData(meta);
+      f->refs = 1;
+
+      auto& add_files = level_state.added_files;
+      assert(add_files.find(file_number) == add_files.end());
+      add_files.emplace(file_number, f);
+
+      const uint64_t blob_file_number = f->oldest_blob_file_number;
+
+      if (blob_file_number != kInvalidBlobFileNumber &&
+          IsBlobFileInVersion(blob_file_number)) {
+        blob_file_meta_deltas_[blob_file_number].LinkSst(file_number);
+      }
     }
-
-    FileMetaData* const f = new FileMetaData(meta);
-    f->refs = 1;
-
-    auto& add_files = level_state.added_files;
-    assert(add_files.find(file_number) == add_files.end());
-    add_files.emplace(file_number, f);
-
-    const uint64_t blob_file_number = f->oldest_blob_file_number;
-
-    if (blob_file_number != kInvalidBlobFileNumber &&
-        IsBlobFileInVersion(blob_file_number)) {
-      blob_file_meta_deltas_[blob_file_number].LinkSst(file_number);
-    }
+    
 
     table_file_levels_[file_number] = level;
 
@@ -888,6 +967,67 @@ class VersionBuilder::Rep {
       }
     }
 
+    {
+      //hot files
+      // const auto& cmp = (level == 0) ? level_zero_cmp_ : level_nonzero_cmp_;
+      const auto& cmp = level_zero_cmp_;
+      const auto& hot_files = base_vstorage_->HotLevelFiles();
+      const auto& unordered_added_files = hot_level_.added_files;
+      vstorage->ReserveHot(hot_files.size() + unordered_added_files.size());
+
+      // Sort added files for the level.
+      std::vector<FileMetaData*> added_files;
+      added_files.reserve(unordered_added_files.size());
+      for (const auto& pair : unordered_added_files) {
+        added_files.push_back(pair.second);
+      }
+      std::sort(added_files.begin(), added_files.end(), cmp);
+
+      auto base_iter = hot_files.begin();
+      auto base_end = hot_files.end();
+      auto added_iter = added_files.begin();
+      auto added_end = added_files.end();
+      while (added_iter != added_end || base_iter != base_end) {
+        if (base_iter == base_end ||
+                (added_iter != added_end && cmp(*added_iter, *base_iter))) {
+          MaybeAddHotFile(vstorage, *added_iter++);
+        } else {
+          MaybeAddHotFile(vstorage, *base_iter++);
+        }
+      }
+    }
+
+    {
+      //warm files
+      // const auto& cmp = (level == 0) ? level_zero_cmp_ : level_nonzero_cmp_;
+      const auto& cmp = level_zero_cmp_;
+      const auto& warm_files = base_vstorage_->WarmLevelFiles();
+      const auto& unordered_added_files = warm_level_.added_files;
+      vstorage->ReserveWarm(warm_files.size() + unordered_added_files.size());
+
+      // Sort added files for the level.
+      std::vector<FileMetaData*> added_files;
+      added_files.reserve(unordered_added_files.size());
+      for (const auto& pair : unordered_added_files) {
+        added_files.push_back(pair.second);
+      }
+      std::sort(added_files.begin(), added_files.end(), cmp);
+
+      auto base_iter = warm_files.begin();
+      auto base_end = warm_files.end();
+      auto added_iter = added_files.begin();
+      auto added_end = added_files.end();
+      while (added_iter != added_end || base_iter != base_end) {
+        if (base_iter == base_end ||
+                (added_iter != added_end && cmp(*added_iter, *base_iter))) {
+          MaybeAddWarmFile(vstorage, *added_iter++);
+        } else {
+          MaybeAddWarmFile(vstorage, *base_iter++);
+        }
+      }
+    }
+    
+
     SaveBlobFilesTo(vstorage);
 
     s = CheckConsistency(vstorage);
@@ -1017,6 +1157,56 @@ class VersionBuilder::Rep {
         vstorage->RemoveCurrentStats(f);
       } else {
         vstorage->AddFile(level, f);
+      }
+    }
+  }
+
+  void MaybeAddHotFile(VersionStorageInfo* vstorage, FileMetaData* f) {
+    const uint64_t file_number = f->fd.GetNumber();
+
+    const auto& level_state = hot_level_;
+
+    const auto& del_files = level_state.deleted_files;
+    const auto del_it = del_files.find(file_number);
+
+    if (del_it != del_files.end()) {
+      // f is to-be-deleted table file
+      vstorage->RemoveCurrentStats(f);
+    } else {
+      const auto& add_files = level_state.added_files;
+      const auto add_it = add_files.find(file_number);
+
+      // Note: if the file appears both in the base version and in the added
+      // list, the added FileMetaData supersedes the one in the base version.
+      if (add_it != add_files.end() && add_it->second != f) {
+        vstorage->RemoveCurrentStats(f);
+      } else {
+        vstorage->AddFile(FileArea::fHot, f);
+      }
+    }
+  }
+
+  void MaybeAddWarmFile(VersionStorageInfo* vstorage, FileMetaData* f) {
+    const uint64_t file_number = f->fd.GetNumber();
+
+    const auto& level_state = warm_level_;
+
+    const auto& del_files = level_state.deleted_files;
+    const auto del_it = del_files.find(file_number);
+
+    if (del_it != del_files.end()) {
+      // f is to-be-deleted table file
+      vstorage->RemoveCurrentStats(f);
+    } else {
+      const auto& add_files = level_state.added_files;
+      const auto add_it = add_files.find(file_number);
+
+      // Note: if the file appears both in the base version and in the added
+      // list, the added FileMetaData supersedes the one in the base version.
+      if (add_it != add_files.end() && add_it->second != f) {
+        vstorage->RemoveCurrentStats(f);
+      } else {
+        vstorage->AddFile(FileArea::fWarm, f);
       }
     }
   }

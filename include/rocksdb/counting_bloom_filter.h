@@ -15,9 +15,12 @@ namespace ROCKSDB_NAMESPACE{
 
 class CountingBloomFilter {
  public:
-  explicit CountingBloomFilter(int cnter_per_key) : cnter_per_key_(cnter_per_key){
+  explicit CountingBloomFilter(int cnter_per_key, int hot_thres, int warm_thres) 
+          : cnter_per_key_(cnter_per_key),
+          hot_thres_(hot_thres),
+          warm_thres_(warm_thres) {
     //暂时不考虑像bloom那样用0.69缩减空间
-    capacity_ = 100000; //at most 10^7 keys;
+    capacity_ = 10000000; //at most 10^7 keys;
   }
 
   void InitCBF() {
@@ -111,13 +114,21 @@ class CountingBloomFilter {
     return smallest;
   }
 
+  bool isHot(const Slice& key) {
+    return KeyCounter(key) >= hot_thres_;
+  }
 
+  bool isWarm(const Slice& key) {
+    return KeyCounter(key) >= warm_thres_;
+  }
 
  private:
   mutable std::shared_mutex mutex_;
   int cnter_per_key_;
   std::string filter_;
   int capacity_;
+  int hot_thres_;
+  int warm_thres_;
 };
 
 } // namespace rocksdb

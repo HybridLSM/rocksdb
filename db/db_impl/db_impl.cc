@@ -261,7 +261,9 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   }
 
   if (options.hot_aware) {
-    cbf = std::make_shared<CountingBloomFilter>(4);    
+    cbf = std::make_shared<CountingBloomFilter>(3, 
+                              options.hot_thres, options.warm_thres); 
+    cbf->InitCBF();   
   } else {
     cbf = nullptr;
   }
@@ -1638,6 +1640,9 @@ Status DBImpl::Get(const ReadOptions& read_options,
   get_impl_options.value = value;
   get_impl_options.timestamp = timestamp;
   Status s = GetImpl(read_options, key, get_impl_options);
+  if (s.ok() && cbf != nullptr) {
+    cbf->AddKey(key);
+  }
   return s;
 }
 
