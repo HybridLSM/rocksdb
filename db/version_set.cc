@@ -544,12 +544,6 @@ class FilePickerWithHW {
         curr_file_level_ = &(*level_files_brief_)[FileArea::fHot]; // hot files
         actual_level_ = FileArea::fHot;
         if (curr_file_level_->num_files == 0) {
-          // When current level is empty, the search bound generated from upper
-          // level must be [0, -1] or [0, FileIndexer::kLevelMaxIndex] if it is
-          // also empty.
-          assert(search_left_bound_ == 0);
-          assert(search_right_bound_ == -1 ||
-                search_right_bound_ == FileIndexer::kLevelMaxIndex);
           // Since current level is empty, it will need to search all files in
           // the next level
           search_left_bound_ = 0;
@@ -567,12 +561,6 @@ class FilePickerWithHW {
         curr_file_level_ = &(*level_files_brief_)[FileArea::fWarm]; // warm files
         actual_level_ = FileArea::fWarm;
         if (curr_file_level_->num_files == 0) {
-          // When current level is empty, the search bound generated from upper
-          // level must be [0, -1] or [0, FileIndexer::kLevelMaxIndex] if it is
-          // also empty.
-          assert(search_left_bound_ == 0);
-          assert(search_right_bound_ == -1 ||
-                search_right_bound_ == FileIndexer::kLevelMaxIndex);
           // Since current level is empty, it will need to search all files in
           // the next level
           search_left_bound_ = 0;

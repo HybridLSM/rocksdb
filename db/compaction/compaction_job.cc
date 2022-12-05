@@ -1314,19 +1314,6 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       RecordDroppedKeys(range_del_out_stats,
                         &sub_compact->compaction_job_stats);
     }
-
-    if (output_file_ended) {
-      const Slice* next_key = nullptr;
-      if (c_iter->Valid()) {
-        next_key = &c_iter->key();
-      }
-      CompactionIterationStats range_del_out_stats;
-      status = FinishCompactionOutputFile(input->status(), sub_compact,
-                                          &range_del_agg, &range_del_out_stats,
-                                          next_key);
-      RecordDroppedKeys(range_del_out_stats,
-                        &sub_compact->compaction_job_stats);
-    }
   }
 
   sub_compact->compaction_job_stats.num_blobs_read =
