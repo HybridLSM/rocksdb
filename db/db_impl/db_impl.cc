@@ -1809,7 +1809,32 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   }
   if (!done) {
     PERF_TIMER_GUARD(get_from_output_files_time);
-    sv->current->Get(
+    if (keyupd_lru != nullptr) {
+      uint64_t file_num;
+      bool found = keyupd_lru->FindSst(lkey.user_key(), &file_num);
+      if (found) {
+        sv->current->GetByFilenum(
+          read_options, lkey, file_num, get_impl_options.value, timestamp, &s,
+          &merge_context, &max_covering_tombstone_seq,
+          get_impl_options.get_value ? get_impl_options.value_found : nullptr,
+          nullptr, nullptr,
+          get_impl_options.get_value ? get_impl_options.callback : nullptr,
+          get_impl_options.get_value ? get_impl_options.is_blob_index : nullptr,
+          get_impl_options.get_value
+        );
+      }
+      if (!found || !s.ok()) {
+        sv->current->Get(
+          read_options, lkey, get_impl_options.value, timestamp, &s,
+          &merge_context, &max_covering_tombstone_seq,
+          get_impl_options.get_value ? get_impl_options.value_found : nullptr,
+          nullptr, nullptr,
+          get_impl_options.get_value ? get_impl_options.callback : nullptr,
+          get_impl_options.get_value ? get_impl_options.is_blob_index : nullptr,
+          get_impl_options.get_value);
+      }
+    } else {
+      sv->current->Get(
         read_options, lkey, get_impl_options.value, timestamp, &s,
         &merge_context, &max_covering_tombstone_seq,
         get_impl_options.get_value ? get_impl_options.value_found : nullptr,
@@ -1817,6 +1842,8 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
         get_impl_options.get_value ? get_impl_options.callback : nullptr,
         get_impl_options.get_value ? get_impl_options.is_blob_index : nullptr,
         get_impl_options.get_value);
+    }
+    
     RecordTick(stats_, MEMTABLE_MISS);
   }
 

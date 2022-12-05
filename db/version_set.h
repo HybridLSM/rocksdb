@@ -709,6 +709,13 @@ class Version {
            bool* value_found = nullptr, bool* key_exists = nullptr,
            SequenceNumber* seq = nullptr, ReadCallback* callback = nullptr,
            bool* is_blob = nullptr, bool do_merge = true);
+  void GetByFilenum(const ReadOptions&, const LookupKey& key, 
+           const uint64_t& file_num, PinnableSlice* value,
+           std::string* timestamp, Status* status, MergeContext* merge_context,
+           SequenceNumber* max_covering_tombstone_seq,
+           bool* value_found = nullptr, bool* key_exists = nullptr,
+           SequenceNumber* seq = nullptr, ReadCallback* callback = nullptr,
+           bool* is_blob = nullptr, bool do_merge = true);
 
   void MultiGet(const ReadOptions&, MultiGetRange* range,
                 ReadCallback* callback = nullptr);
