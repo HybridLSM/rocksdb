@@ -1812,9 +1812,10 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
     if (keyupd_lru != nullptr) {
       uint64_t file_num;
       bool found = keyupd_lru->FindSst(lkey.user_key(), &file_num);
+      Status get_by_file_s;
       if (found) {
         sv->current->GetByFilenum(
-          read_options, lkey, file_num, get_impl_options.value, timestamp, &s,
+          read_options, lkey, file_num, get_impl_options.value, timestamp, &get_by_file_s,
           &merge_context, &max_covering_tombstone_seq,
           get_impl_options.get_value ? get_impl_options.value_found : nullptr,
           nullptr, nullptr,
@@ -1823,7 +1824,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
           get_impl_options.get_value
         );
       }
-      if (!found || !s.ok()) {
+      if (!found || !get_by_file_s.ok()) {
         sv->current->Get(
           read_options, lkey, get_impl_options.value, timestamp, &s,
           &merge_context, &max_covering_tombstone_seq,

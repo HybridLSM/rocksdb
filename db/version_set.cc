@@ -18,6 +18,7 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "compaction/compaction.h"
@@ -2779,7 +2780,7 @@ void Version::GetByFilenum(const ReadOptions& read_options, const LookupKey& k,
 
   GetContext get_context(
       user_comparator(), merge_operator_, info_log_, db_statistics_,
-      status->ok() ? GetContext::kNotFound : GetContext::kMerge, user_key,
+      GetContext::kNotFound, user_key,
       do_merge ? value : nullptr, do_merge ? timestamp : nullptr, value_found,
       merge_context, do_merge, max_covering_tombstone_seq, clock_, seq,
       merge_operator_ ? &pinned_iters_mgr : nullptr, callback, is_blob_to_use,
@@ -2920,6 +2921,137 @@ void Version::GetByFilenum(const ReadOptions& read_options, const LookupKey& k,
     }
     *status = Status::NotFound(); // Use an empty error message for speed
   }
+}
+
+// check if key exists from level 0 to 'until_level'
+// first, get file's level according to file_num, if the level is deeper than
+// until_level, return false, else return true;
+// second, if the file_num < 0, check from level 0 to 'until_level' like Get
+bool Version::CheckKeyExists(const ReadOptions& read_options, const LookupKey& k,
+                  const uint64_t& file_num, int until_level,
+                  PinnableSlice* value, std::string* timestamp, Status* status,
+                  MergeContext* merge_context,
+                  SequenceNumber* max_covering_tombstone_seq, bool* value_found,
+                  bool* key_exists, SequenceNumber* seq, ReadCallback* callback,
+                  bool* is_blob, bool do_merge) {
+  Slice ikey = k.internal_key();
+  Slice user_key = k.user_key();
+  assert(until_level == FileArea::fHot || until_level == FileArea::fWarm);
+  assert(status->ok() || status->IsMergeInProgress());
+
+  if (key_exists != nullptr) {
+    // will falsify below if not found
+    *key_exists = true;
+  }
+  // if until_level is fhot(i.e. 16), file's level in below will return true
+  // 0, 16
+  // if until_level is fwarm(i.e 17), file's level in below will return true
+  // 0, 16, 1, 17
+  // else return false
+  std::unordered_set<int> true_for_hot_level = {0, FileArea::fHot};
+  std::unordered_set<int> true_for_warm_level = {0, FileArea::fHot, 1, FileArea::fWarm};
+  if (file_num >= 0) {
+    auto location = storage_info_.GetFileLocation(file_num);
+    auto level = location.GetLevel();
+    assert(location.IsValid());
+    if (until_level == FileArea::fHot) {
+      if (true_for_hot_level.find(level) != true_for_hot_level.end()) {
+        return true; // theoretically will not fall into this situation
+      } else {
+        return false;
+      }
+    } else if (until_level == FileArea::fWarm) {
+      if (true_for_warm_level.find(level) != true_for_warm_level.end()) {
+        return true; // theoretically will not fall into this situation
+      } else {
+        return false;
+      }
+    }
+  }
+
+  PinnedIteratorsManager pinned_iters_mgr;
+  uint64_t tracing_get_id = BlockCacheTraceHelper::kReservedGetId;
+  if (vset_ && vset_->block_cache_tracer_ &&
+      vset_->block_cache_tracer_->is_tracing_enabled()) {
+    tracing_get_id = vset_->block_cache_tracer_->NextGetId();
+  }
+
+  // Note: the old StackableDB-based BlobDB passes in
+  // GetImplOptions::is_blob_index; for the integrated BlobDB implementation, we
+  // need to provide it here.
+  bool is_blob_index = false;
+  bool* const is_blob_to_use = is_blob ? is_blob : &is_blob_index;
+
+  GetContext get_context(
+      user_comparator(), merge_operator_, info_log_, db_statistics_,
+      GetContext::kNotFound, user_key,
+      do_merge ? value : nullptr, do_merge ? timestamp : nullptr, value_found,
+      merge_context, do_merge, max_covering_tombstone_seq, clock_, seq,
+      merge_operator_ ? &pinned_iters_mgr : nullptr, callback, is_blob_to_use,
+      tracing_get_id);
+
+  // Pin blocks that we read to hold merge operands
+  if (merge_operator_) {
+    pinned_iters_mgr.StartPinning();
+  }
+
+  FilePickerWithHW fp(
+      storage_info_.files_, storage_info_.hot_files_, storage_info_.warm_files_, 
+      user_key, ikey, &storage_info_.level_files_brief_,
+      storage_info_.num_non_empty_levels_, &storage_info_.file_indexer_,
+      user_comparator(), internal_comparator());
+  FdWithKeyRange* f = fp.GetNextFile();
+
+  while (f != nullptr) {
+    if (until_level == FileArea::fHot) {
+      if (true_for_hot_level.find(fp.GetCurrentLevel()) == true_for_hot_level.end()) {
+        break;
+      }
+    } else if (until_level == FileArea::fWarm) {
+      if (true_for_warm_level.find(fp.GetCurrentLevel()) == true_for_warm_level.end()) {
+        break;
+      }
+    }
+    if (*max_covering_tombstone_seq > 0) {
+      // The remaining files we look at will only contain covered keys, so we
+      // stop here.
+      break;
+    }
+    if (get_context.sample()) {
+      sample_file_read_inc(f->file_metadata);
+    }
+
+    *status = table_cache_->Get(
+        read_options, *internal_comparator(), *f->file_metadata, ikey,
+        &get_context, mutable_cf_options_.prefix_extractor.get(),
+        cfd_->internal_stats()->GetFileReadHist(fp.GetHitFileLevel()),
+        IsFilterSkipped(static_cast<int>(fp.GetHitFileLevel()),
+                        fp.IsHitFileLastInLevel()),
+        fp.GetHitFileLevel(), max_file_size_for_l0_meta_pin_);
+    if (!status->ok()) {
+      return false;
+    }
+
+    switch (get_context.State()) {
+      case GetContext::kNotFound:
+        // Keep searching in other files
+        break;
+      case GetContext::kMerge:
+        // TODO: update per-level perfcontext user_key_return_count for kMerge
+        break;
+      case GetContext::kFound:
+        return true;
+      case GetContext::kDeleted:
+        return false;
+      case GetContext::kCorrupt:
+        return false;
+      case GetContext::kUnexpectedBlobIndex:
+        ROCKS_LOG_ERROR(info_log_, "Encounter unexpected blob index.");
+        return false;
+    }
+    f = fp.GetNextFile();
+  }
+  return false;
 }
 
 

@@ -1107,13 +1107,52 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     const Slice& key = c_iter->key();
     const Slice& value = c_iter->value();
     const Slice& user_key = ExtractUserKey(key);
+    LookupKey lkey(user_key, ExtractInternalKeyFooter(key));
 
+    uint64_t newest_file_num = -1;
     if (keyupd_lru != nullptr) {
-      uint64_t newest_file_num;
       bool found = keyupd_lru->FindSst(c_iter->user_key(), &newest_file_num);
       if (found && c_iter->file_num() != newest_file_num) {
         c_iter->Next();
         continue;
+      }
+    }
+
+    // if option.hot_aware is true
+    // classify kv to hot/warm/cold
+    bool hot = false;
+    bool warm = false;
+    
+    if (cbf != nullptr) {
+      // check cbf
+      if (cbf->isHot(user_key) && sub_compact->compaction->level() >= 1) {
+        hot = true;
+        PinnableSlice v;
+        Status s;
+        MergeContext mc;
+        SequenceNumber max_covering_tombstone_seq = 0;
+        bool exists = cfd->GetSuperVersion()->current->CheckKeyExists(
+          read_options, lkey, newest_file_num, FileArea::fHot,
+          &v, nullptr, &s, &mc, &max_covering_tombstone_seq
+        );
+        if (exists) { // drop this key
+          c_iter->Next();
+          continue;
+        }
+      } else if (cbf->isWarm(user_key) && sub_compact->compaction->level() >= 2) {
+        warm = true;
+        PinnableSlice v;
+        Status s;
+        MergeContext mc;
+        SequenceNumber max_covering_tombstone_seq = 0;
+        bool exists = cfd->GetSuperVersion()->current->CheckKeyExists(
+          read_options, lkey, newest_file_num, FileArea::fWarm,
+          &v, nullptr, &s, &mc, &max_covering_tombstone_seq
+        );
+        if (exists) { // drop this key
+          c_iter->Next();
+          continue;
+        }
       }
     }
     
@@ -1130,18 +1169,6 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       RecordCompactionIOStats();
     }
 
-    // if option.hot_aware is true
-    // classify kv to hot/warm/cold
-    bool hot = false;
-    bool warm = false;
-    if (cbf != nullptr) {
-      // check cbf
-      if (cbf->isHot(user_key)) {
-        hot = true;
-      } else if (cbf->isWarm(user_key)) {
-        warm = true;
-      }
-    }
     // Open output file if necessary
     // then add to builder
     if (hot) {
