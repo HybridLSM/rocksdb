@@ -280,6 +280,8 @@ class VersionStorageInfo {
   // REQUIRES: This version has been saved (see VersionSet::SaveTo)
   int NumLevelFiles(int level) const {
     assert(finalized_);
+    if (level == FileArea::fHot) return static_cast<int>(hot_files_.size());
+    if (level == FileArea::fWarm) return static_cast<int>(warm_files_.size());
     return static_cast<int>(files_[level].size());
   }
 

@@ -455,6 +455,10 @@ void ExternalSstFileIngestionJob::UpdateStats() {
   for (int level = 0; level < vstorage->num_levels(); ++level) {
     stream << vstorage->NumLevelFiles(level);
   }
+  stream << "HW";
+  for (int level = FileArea::fHot; level <= FileArea::fWarm; ++level) {
+    stream << vstorage->NumLevelFiles(level);
+  }
   stream.EndArray();
 
   cfd_->internal_stats()->AddCFStats(InternalStats::INGESTED_NUM_KEYS_TOTAL,

@@ -663,9 +663,6 @@ class FilePickerByFilenum {
         level_files_brief_(file_levels),
         is_hit_file_last_in_level_(false),
         curr_file_level_(nullptr) {
-#ifdef NDEBUG
-    (void)files;
-#endif
     // Setup member variables to search first level.
     // Prefetch Level 0 table data to avoid cache miss if possible.
     // Todo??? prefetch??

@@ -47,8 +47,7 @@ CompactionIteratorWithNum::CompactionIteratorWithNum(
     const SequenceNumber preserve_deletes_seqnum,
     const std::atomic<int>* manual_compaction_paused,
     const std::shared_ptr<Logger> info_log,
-    const std::string* full_history_ts_low,
-    std::shared_ptr<KeyUpdLru> keyupd_lru_)
+    const std::string* full_history_ts_low)
     : CompactionIteratorWithNum(
           input, cmp, merge_helper, last_sequence, snapshots,
           earliest_write_conflict_snapshot, snapshot_checker, env,
@@ -57,7 +56,7 @@ CompactionIteratorWithNum::CompactionIteratorWithNum(
           std::unique_ptr<CompactionProxy>(
               compaction ? new RealCompaction(compaction) : nullptr),
           compaction_filter, shutting_down, preserve_deletes_seqnum,
-          manual_compaction_paused, info_log, full_history_ts_low, keyupd_lru_) {}
+          manual_compaction_paused, info_log, full_history_ts_low) {}
 
 CompactionIteratorWithNum::CompactionIteratorWithNum(
     InternalIterator* input, const Comparator* cmp, MergeHelper* merge_helper,
@@ -73,8 +72,7 @@ CompactionIteratorWithNum::CompactionIteratorWithNum(
     const SequenceNumber preserve_deletes_seqnum,
     const std::atomic<int>* manual_compaction_paused,
     const std::shared_ptr<Logger> info_log,
-    const std::string* full_history_ts_low,
-    std::shared_ptr<KeyUpdLru> keyupd_lru_)
+    const std::string* full_history_ts_low)
     : input_(input),
       cmp_(cmp),
       merge_helper_(merge_helper),
@@ -102,8 +100,7 @@ CompactionIteratorWithNum::CompactionIteratorWithNum(
       blob_garbage_collection_cutoff_file_number_(
           ComputeBlobGarbageCollectionCutoffFileNumber(compaction_.get())),
       current_key_committed_(false),
-      cmp_with_history_ts_low_(0),
-      keyupd_lru(keyupd_lru_) {
+      cmp_with_history_ts_low_(0) {
   assert(compaction_filter_ == nullptr || compaction_ != nullptr);
   assert(snapshots_ != nullptr);
   bottommost_level_ = compaction_ == nullptr

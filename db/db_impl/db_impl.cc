@@ -102,6 +102,8 @@
 #include "util/stop_watch.h"
 #include "util/string_util.h"
 
+#define COUNT
+
 namespace ROCKSDB_NAMESPACE {
 
 const std::string kDefaultColumnFamilyName("default");
@@ -234,7 +236,10 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
       error_handler_(this, immutable_db_options_, &mutex_),
       atomic_flush_install_cv_(&mutex_),
       blob_callback_(immutable_db_options_.sst_file_manager.get(), &mutex_,
-                     &error_handler_) {
+                     &error_handler_),
+      upd_hit_counter(0),
+      upd_hit_not_found_counter(0),
+      upd_total_access_counter(0) {
   // !batch_per_trx_ implies seq_per_batch_ because it is only unset for
   // WriteUnprepared, which should use seq_per_batch_.
   assert(batch_per_txn_ || seq_per_batch_);
@@ -688,6 +693,12 @@ Status DBImpl::CloseHelper() {
 Status DBImpl::CloseImpl() { return CloseHelper(); }
 
 DBImpl::~DBImpl() {
+#ifdef COUNT
+  printf("upd hit count: %d\n", upd_hit_counter.load());
+  printf("upd hit but not found count: %d\n", upd_hit_not_found_counter.load());
+  printf("upd total access count: %d\n", upd_total_access_counter.load());
+#endif
+
   if (!closed_) {
     closed_ = true;
     CloseHelper().PermitUncheckedError();
@@ -1810,10 +1821,16 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   if (!done) {
     PERF_TIMER_GUARD(get_from_output_files_time);
     if (keyupd_lru != nullptr) {
+#ifdef COUNT
+      upd_total_access_counter++;
+#endif
       uint64_t file_num;
       bool found = keyupd_lru->FindSst(lkey.user_key(), &file_num);
       Status get_by_file_s;
       if (found) {
+#ifdef COUNT
+        upd_hit_counter++;
+#endif
         sv->current->GetByFilenum(
           read_options, lkey, file_num, get_impl_options.value, timestamp, &get_by_file_s,
           &merge_context, &max_covering_tombstone_seq,
@@ -1823,6 +1840,11 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
           get_impl_options.get_value ? get_impl_options.is_blob_index : nullptr,
           get_impl_options.get_value
         );
+#ifdef COUNT
+        if (!get_by_file_s.ok()) {
+          upd_hit_not_found_counter++;
+        }
+#endif       
       }
       if (!found || !get_by_file_s.ok()) {
         sv->current->Get(

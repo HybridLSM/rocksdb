@@ -274,6 +274,10 @@ Status FlushJob::Run(LogsWithPrepTracker* prep_tracker,
   for (int level = 0; level < vstorage->num_levels(); ++level) {
     stream << vstorage->NumLevelFiles(level);
   }
+  stream << "HW";
+  for (int level = FileArea::fHot; level <= FileArea::fWarm; ++level) {
+    stream << vstorage->NumLevelFiles(level);
+  }
   stream.EndArray();
 
   const auto& blob_files = vstorage->GetBlobFiles();

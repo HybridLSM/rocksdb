@@ -2238,6 +2238,9 @@ class DBImpl : public DB {
   std::shared_ptr<KeyUpdLru> keyupd_lru;
   std::shared_ptr<ScoreTable> score_tbl;
   std::shared_ptr<CountingBloomFilter> cbf;
+  std::atomic<int> upd_hit_counter;
+  std::atomic<int> upd_hit_not_found_counter;
+  std::atomic<int> upd_total_access_counter;
 };
 
 extern Options SanitizeOptions(const std::string& db, const Options& src,

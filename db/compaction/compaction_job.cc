@@ -951,6 +951,10 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
   for (int level = 0; level < vstorage->num_levels(); ++level) {
     stream << vstorage->NumLevelFiles(level);
   }
+  stream << "HW";
+  for (int level = FileArea::fHot; level <= FileArea::fWarm; ++level) {
+    stream << vstorage->NumLevelFiles(level);
+  }
   stream.EndArray();
 
   if (!blob_files.empty()) {
@@ -1032,12 +1036,19 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   }
 
   MergeHelper merge(
-      env_, cfd->user_comparator(), cfd->ioptions()->merge_operator,
+      env_, &cfd->internal_comparator(), cfd->ioptions()->merge_operator,
       compaction_filter, db_options_.info_log.get(),
       false /* internal key corruption is expected */,
       existing_snapshots_.empty() ? 0 : existing_snapshots_.back(),
       snapshot_checker_, compact_->compaction->level(),
       db_options_.statistics.get());
+  // MergeHelper merge(
+  //     env_, cfd->internal_comparator_with_num(), cfd->ioptions()->merge_operator,
+  //     compaction_filter, db_options_.info_log.get(),
+  //     false /* internal key corruption is expected */,
+  //     existing_snapshots_.empty() ? 0 : existing_snapshots_.back(),
+  //     snapshot_checker_, compact_->compaction->level(),
+  //     db_options_.statistics.get());
 
   const MutableCFOptions* mutable_cf_options =
       sub_compact->compaction->mutable_cf_options();
@@ -1076,14 +1087,14 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   const std::string* const full_history_ts_low =
       full_history_ts_low_.empty() ? nullptr : &full_history_ts_low_;
   sub_compact->c_iter.reset(new CompactionIteratorWithNum(
-      input.get(), cfd->user_comparator(), &merge, versions_->LastSequence(),
+      input.get(), &cfd->internal_comparator(), &merge, versions_->LastSequence(),
       &existing_snapshots_, earliest_write_conflict_snapshot_,
       snapshot_checker_, env_, ShouldReportDetailedTime(env_, stats_),
       /*expect_valid_internal_key=*/true, &range_del_agg,
       blob_file_builder.get(), db_options_.allow_data_in_errors,
       sub_compact->compaction, compaction_filter, shutting_down_,
       preserve_deletes_seqnum_, manual_compaction_paused_, db_options_.info_log,
-      full_history_ts_low, keyupd_lru)); // add keyupd_lru
+      full_history_ts_low)); // add keyupd_lru
   auto c_iter = sub_compact->c_iter.get();
   c_iter->SeekToFirst();
   if (c_iter->Valid() && sub_compact->compaction->output_level() != 0) {

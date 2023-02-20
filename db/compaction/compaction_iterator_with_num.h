@@ -11,7 +11,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include "rocksdb/keyupd_lru.h"
 #include "db/compaction/compaction.h"
 #include "db/compaction/compaction_iteration_stats.h"
 #include "db/merge_helper.h"
@@ -121,8 +120,7 @@ class CompactionIteratorWithNum {
                      const SequenceNumber preserve_deletes_seqnum = 0,
                      const std::atomic<int>* manual_compaction_paused = nullptr,
                      const std::shared_ptr<Logger> info_log = nullptr,
-                     const std::string* full_history_ts_low = nullptr,
-                     std::shared_ptr<KeyUpdLru> keyupd_lru_ = nullptr);
+                     const std::string* full_history_ts_low = nullptr);
 
   // Constructor with custom CompactionProxy, used for tests.
   CompactionIteratorWithNum(InternalIterator* input, const Comparator* cmp,
@@ -140,8 +138,7 @@ class CompactionIteratorWithNum {
                      const SequenceNumber preserve_deletes_seqnum = 0,
                      const std::atomic<int>* manual_compaction_paused = nullptr,
                      const std::shared_ptr<Logger> info_log = nullptr,
-                     const std::string* full_history_ts_low = nullptr,
-                     std::shared_ptr<KeyUpdLru> keyupd_lru_ = nullptr);
+                     const std::string* full_history_ts_low = nullptr);
 
   ~CompactionIteratorWithNum();
 
@@ -284,8 +281,6 @@ class CompactionIteratorWithNum {
 
   // State
   //
-  // keyupd_lru. Used for drop more invalid keys during compaction
-  std::shared_ptr<KeyUpdLru> keyupd_lru;
   int file_num_; // key_'s corresponding file number
   // Points to a copy of the current compaction iterator output (current_key_)
   // if valid_.
