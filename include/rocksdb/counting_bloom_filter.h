@@ -119,7 +119,8 @@ class CountingBloomFilter {
   }
 
   bool isWarm(const Slice& key) {
-    return KeyCounter(key) >= warm_thres_;
+    auto c = KeyCounter(key);
+    return c >= warm_thres_ && c < hot_thres_;
   }
 
  private:

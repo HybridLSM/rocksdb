@@ -542,7 +542,7 @@ class VersionBuilder::Rep {
       return Status::Corruption("VersionBuilder", oss.str());
     }
 
-    if (level >= num_levels_ && (level != FileArea::fHot || level != FileArea::fWarm)) {
+    if (level >= num_levels_ && (level != FileArea::fHot && level != FileArea::fWarm)) {
       assert(invalid_level_sizes_[level] > 0);
       --invalid_level_sizes_[level];
 
@@ -617,7 +617,7 @@ class VersionBuilder::Rep {
 
     if (current_level !=
         VersionStorageInfo::FileLocation::Invalid().GetLevel()) {
-      if (level >= num_levels_  && (level != FileArea::fHot || level != FileArea::fWarm)) {
+      if (level >= num_levels_  && (level != FileArea::fHot && level != FileArea::fWarm)) {
         has_invalid_levels_ = true;
       }
 
@@ -627,7 +627,7 @@ class VersionBuilder::Rep {
       return Status::Corruption("VersionBuilder", oss.str());
     }
 
-    if (level >= num_levels_ && (level != FileArea::fHot || level != FileArea::fWarm)) {
+    if (level >= num_levels_ && (level != FileArea::fHot && level != FileArea::fWarm)) {
       ++invalid_level_sizes_[level];
       table_file_levels_[file_number] = level;
 

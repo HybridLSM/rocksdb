@@ -589,6 +589,12 @@ bool InternalStats::HandleLevelStats(std::string* value, Slice /*suffix*/) {
              vstorage->NumLevelBytes(level) / kMB);
     value->append(buf);
   }
+  for (int level = FileArea::fHot; level <= FileArea::fWarm; level++) {
+    snprintf(buf, sizeof(buf), "%3d %8d %8.0f\n", level,
+             vstorage->NumLevelFiles(level),
+             vstorage->NumLevelBytes(level) / kMB);
+    value->append(buf);
+  }
   return true;
 }
 

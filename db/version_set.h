@@ -333,11 +333,28 @@ class VersionStorageInfo {
       return FileLocation::Invalid();
     }
 
-    assert(it->second.GetLevel() < num_levels_);
-    assert(it->second.GetPosition() < files_[it->second.GetLevel()].size());
-    assert(files_[it->second.GetLevel()][it->second.GetPosition()]);
-    assert(files_[it->second.GetLevel()][it->second.GetPosition()]
+    assert(it->second.GetLevel() < num_levels_ ||
+           it->second.GetLevel() == FileArea::fHot ||
+           it->second.GetLevel() == FileArea::fWarm);
+    
+    auto level = it->second.GetLevel();
+    if (level < num_levels_) {
+      assert(it->second.GetPosition() < files_[it->second.GetLevel()].size());
+      assert(files_[it->second.GetLevel()][it->second.GetPosition()]);
+      assert(files_[it->second.GetLevel()][it->second.GetPosition()]
                ->fd.GetNumber() == file_number);
+    } else if (level == FileArea::fHot) {
+      assert(it->second.GetPosition() < hot_files_.size());
+      assert(hot_files_[it->second.GetPosition()]);
+      assert(hot_files_[it->second.GetPosition()]
+               ->fd.GetNumber() == file_number);
+    } else {
+      assert(it->second.GetPosition() < warm_files_.size());
+      assert(warm_files_[it->second.GetPosition()]);
+      assert(warm_files_[it->second.GetPosition()]
+               ->fd.GetNumber() == file_number);
+    }
+    
 
     return it->second;
   }

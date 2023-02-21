@@ -299,6 +299,8 @@ struct CompactionJob::CompactionState {
   size_t num_blob_output_files = 0;
   uint64_t total_blob_bytes = 0;
   uint64_t num_output_records = 0;
+  uint64_t num_output_hot_records = 0;
+  uint64_t num_output_warm_records = 0;
 
   explicit CompactionState(Compaction* c) : compaction(c) {}
 
@@ -331,13 +333,23 @@ void CompactionJob::AggregateStatistics() {
 
   for (SubcompactionState& sc : compact_->sub_compact_states) {
     auto& outputs = sc.outputs;
+    auto& outputs_hot = sc.outputs_hot;
+    auto& outputs_warm = sc.outputs_warm;
 
     if (!outputs.empty() && !outputs.back().meta.fd.file_size) {
       // An error occurred, so ignore the last output.
       outputs.pop_back();
     }
+    if (!outputs_hot.empty() && !outputs_hot.back().meta.fd.file_size) {
+      // An error occurred, so ignore the last output.
+      outputs_hot.pop_back();
+    }
+    if (!outputs_warm.empty() && !outputs_warm.back().meta.fd.file_size) {
+      // An error occurred, so ignore the last output.
+      outputs_warm.pop_back();
+    }
 
-    compact_->num_output_files += outputs.size();
+    compact_->num_output_files += outputs.size() + outputs_hot.size() + outputs_warm.size();
     compact_->total_bytes += sc.total_bytes;
 
     const auto& blobs = sc.blob_file_additions;
@@ -349,6 +361,8 @@ void CompactionJob::AggregateStatistics() {
     }
 
     compact_->num_output_records += sc.num_output_records;
+    compact_->num_output_hot_records += sc.num_output_hot_records;
+    compact_->num_output_warm_records += sc.num_output_warm_records;
 
     compaction_job_stats_->Add(sc.compaction_job_stats);
   }
@@ -728,6 +742,12 @@ Status CompactionJob::Run() {
       for (const auto& output : state.outputs) {
         files_output.emplace_back(&output);
       }
+      for (const auto& output : state.outputs_hot) {
+        files_output.emplace_back(&output);
+      }
+      for (const auto& output : state.outputs_warm) {
+        files_output.emplace_back(&output);
+      }
     }
     ColumnFamilyData* cfd = compact_->compaction->column_family_data();
     auto prefix_extractor =
@@ -808,6 +828,18 @@ Status CompactionJob::Run() {
   TablePropertiesCollection tp;
   for (const auto& state : compact_->sub_compact_states) {
     for (const auto& output : state.outputs) {
+      auto fn =
+          TableFileName(state.compaction->immutable_cf_options()->cf_paths,
+                        output.meta.fd.GetNumber(), output.meta.fd.GetPathId());
+      tp[fn] = output.table_properties;
+    }
+    for (const auto& output : state.outputs_hot) {
+      auto fn =
+          TableFileName(state.compaction->immutable_cf_options()->cf_paths,
+                        output.meta.fd.GetNumber(), output.meta.fd.GetPathId());
+      tp[fn] = output.table_properties;
+    }
+    for (const auto& output : state.outputs_warm) {
       auto fn =
           TableFileName(state.compaction->immutable_cf_options()->cf_paths,
                         output.meta.fd.GetNumber(), output.meta.fd.GetPathId());
@@ -928,6 +960,8 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
 
   stream << "num_input_records" << stats.num_input_records
          << "num_output_records" << compact_->num_output_records
+         << "num_output_hot_records" << compact_->num_output_hot_records
+         << "num_output_warm_records" << compact_->num_output_warm_records
          << "num_subcompactions" << compact_->sub_compact_states.size()
          << "output_compression"
          << CompressionTypeToString(compact_->compaction->output_compression());
@@ -1120,7 +1154,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     const Slice& user_key = ExtractUserKey(key);
     LookupKey lkey(user_key, ExtractInternalKeyFooter(key));
 
-    uint64_t newest_file_num = -1;
+    uint64_t newest_file_num = 0;
     if (keyupd_lru != nullptr) {
       bool found = keyupd_lru->FindSst(c_iter->user_key(), &newest_file_num);
       if (found && c_iter->file_num() != newest_file_num) {
@@ -1142,7 +1176,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         Status s;
         MergeContext mc;
         SequenceNumber max_covering_tombstone_seq = 0;
-        bool exists = cfd->GetSuperVersion()->current->CheckKeyExists(
+          bool exists = cfd->GetSuperVersion()->current->CheckKeyExists(
           read_options, lkey, newest_file_num, FileArea::fHot,
           &v, nullptr, &s, &mc, &max_covering_tombstone_seq
         );
@@ -3035,6 +3069,8 @@ void CompactionJob::UpdateCompactionJobStats(
   compaction_job_stats_->total_output_bytes = stats.bytes_written;
   compaction_job_stats_->total_output_bytes_blob = stats.bytes_written_blob;
   compaction_job_stats_->num_output_records = compact_->num_output_records;
+  compaction_job_stats_->num_output_hot_records = compact_->num_output_hot_records;
+  compaction_job_stats_->num_output_warm_records = compact_->num_output_warm_records;
   compaction_job_stats_->num_output_files = stats.num_output_files;
   compaction_job_stats_->num_output_files_blob = stats.num_output_files_blob;
 

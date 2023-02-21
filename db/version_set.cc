@@ -464,11 +464,11 @@ class FilePickerWithHW {
         // Sanity check to make sure that the files are correctly sorted
         if (prev_file_) {
           if (curr_level_ != 0 && 
-              (actual_level_ != FileArea::fHot || actual_level_ != FileArea::fWarm)) {
+              (actual_level_ != FileArea::fHot && actual_level_ != FileArea::fWarm)) {
             int comp_sign = internal_comparator_->Compare(
                 prev_file_->largest_key, f->smallest_key);
             assert(comp_sign < 0);
-          } else {
+          } else if (curr_level_ == 0) {
             // level == 0, the current file cannot be newer than the previous
             // one. Use compressed data structure, has no attribute seqNo
             assert(curr_index_in_curr_level_ > 0);
@@ -481,7 +481,7 @@ class FilePickerWithHW {
         // returned_file_level_ = curr_level_;
         returned_file_level_ = actual_level_; // in case of hot and warm area
         if (curr_level_ > 0 && cmp_largest < 0 && 
-          (actual_level_ != FileArea::fHot || actual_level_ != FileArea::fWarm) ) {
+          (actual_level_ != FileArea::fHot && actual_level_ != FileArea::fWarm) ) {
           // No more files to search in this level.
           search_ended_ = !PrepareNextLevel();
         } else {
@@ -2923,7 +2923,7 @@ void Version::GetByFilenum(const ReadOptions& read_options, const LookupKey& k,
 // check if key exists from level 0 to 'until_level'
 // first, get file's level according to file_num, if the level is deeper than
 // until_level, return false, else return true;
-// second, if the file_num < 0, check from level 0 to 'until_level' like Get
+// second, if the file_num == 0, check from level 0 to 'until_level' like Get
 bool Version::CheckKeyExists(const ReadOptions& read_options, const LookupKey& k,
                   const uint64_t& file_num, int until_level,
                   PinnableSlice* value, std::string* timestamp, Status* status,
@@ -2947,7 +2947,7 @@ bool Version::CheckKeyExists(const ReadOptions& read_options, const LookupKey& k
   // else return false
   std::unordered_set<int> true_for_hot_level = {0, FileArea::fHot};
   std::unordered_set<int> true_for_warm_level = {0, FileArea::fHot, 1, FileArea::fWarm};
-  if (file_num >= 0) {
+  if (file_num > 0) {
     auto location = storage_info_.GetFileLocation(file_num);
     auto level = location.GetLevel();
     assert(location.IsValid());
@@ -4401,6 +4401,16 @@ const char* VersionStorageInfo::LevelSummary(
     if (ret < 0 || ret >= sz) break;
     len += ret;
   }
+  if (hot_files_.size() != 0) {
+    int sz = sizeof(scratch->buffer) - len;
+    int ret = snprintf(scratch->buffer + len, sz, "%d ", int(hot_files_.size()));
+    len += ret;
+  }
+  if (warm_files_.size() != 0) {
+    int sz = sizeof(scratch->buffer) - len;
+    int ret = snprintf(scratch->buffer + len, sz, "%d ", int(warm_files_.size()));
+    len += ret;
+  }
   if (len > 0) {
     // overwrite the last space
     --len;
@@ -4716,6 +4726,50 @@ std::string Version::DebugString(bool hex, bool print_stats) const {
     AppendNumberTo(&r, version_number_);
     r.append(" ---\n");
     const std::vector<FileMetaData*>& files = storage_info_.files_[level];
+    for (size_t i = 0; i < files.size(); i++) {
+      r.push_back(' ');
+      AppendNumberTo(&r, files[i]->fd.GetNumber());
+      r.push_back(':');
+      AppendNumberTo(&r, files[i]->fd.GetFileSize());
+      r.append("[");
+      AppendNumberTo(&r, files[i]->fd.smallest_seqno);
+      r.append(" .. ");
+      AppendNumberTo(&r, files[i]->fd.largest_seqno);
+      r.append("]");
+      r.append("[");
+      r.append(files[i]->smallest.DebugString(hex));
+      r.append(" .. ");
+      r.append(files[i]->largest.DebugString(hex));
+      r.append("]");
+      if (files[i]->oldest_blob_file_number != kInvalidBlobFileNumber) {
+        r.append(" blob_file:");
+        AppendNumberTo(&r, files[i]->oldest_blob_file_number);
+      }
+      if (print_stats) {
+        r.append("(");
+        r.append(ToString(
+            files[i]->stats.num_reads_sampled.load(std::memory_order_relaxed)));
+        r.append(")");
+      }
+      r.append("\n");
+    }
+  }
+
+  for (int level = FileArea::fHot; level <= FileArea::fWarm; level++) {
+    // E.g.,
+    //   --- level 1 ---
+    //   17:123[1 .. 124]['a' .. 'd']
+    //   20:43[124 .. 128]['e' .. 'g']
+    //
+    // if print_stats=true:
+    //   17:123[1 .. 124]['a' .. 'd'](4096)
+    r.append("--- level ");
+    AppendNumberTo(&r, level);
+    r.append(" --- version# ");
+    AppendNumberTo(&r, version_number_);
+    r.append(" ---\n");
+    const std::vector<FileMetaData*>& files = level == FileArea::fHot? 
+                      storage_info_.hot_files_: storage_info_.warm_files_;
     for (size_t i = 0; i < files.size(); i++) {
       r.push_back(' ');
       AppendNumberTo(&r, files[i]->fd.GetNumber());

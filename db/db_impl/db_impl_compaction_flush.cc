@@ -1263,7 +1263,8 @@ Status DBImpl::CompactFilesImpl(
       &manual_compaction_paused_, db_id_, db_session_id_,
       c->column_family_data()->GetFullHistoryTsLow(),
       nullptr,
-      keyupd_lru);
+      keyupd_lru,
+      cbf);
 
   // Creating a compaction influences the compaction score because the score
   // takes running compactions into account (by skipping files that are already
@@ -3141,7 +3142,8 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
         is_manual ? &manual_compaction_paused_ : nullptr, db_id_,
         db_session_id_, c->column_family_data()->GetFullHistoryTsLow(),
         nullptr,
-        keyupd_lru);
+        keyupd_lru,
+        cbf);
     compaction_job.Prepare();
 
     NotifyOnCompactionBegin(c->column_family_data(), c.get(), status,

@@ -34,6 +34,8 @@ struct CompactionJobStats {
 
   // the number of compaction output records.
   uint64_t num_output_records;
+  uint64_t num_output_hot_records;
+  uint64_t num_output_warm_records;
   // the number of compaction output files (table files)
   size_t num_output_files;
   // the number of compaction output files (blob files)
