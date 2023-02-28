@@ -1077,7 +1077,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       snapshot_checker_, compact_->compaction->level(),
       db_options_.statistics.get());
   // MergeHelper merge(
-  //     env_, cfd->internal_comparator_with_num(), cfd->ioptions()->merge_operator,
+  //     env_, cfd->user_comparator(), cfd->ioptions()->merge_operator,
   //     compaction_filter, db_options_.info_log.get(),
   //     false /* internal key corruption is expected */,
   //     existing_snapshots_.empty() ? 0 : existing_snapshots_.back(),
@@ -1155,6 +1155,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     LookupKey lkey(user_key, ExtractInternalKeyFooter(key));
 
     uint64_t newest_file_num = 0;
+    // drop old key
     if (keyupd_lru != nullptr) {
       bool found = keyupd_lru->FindSst(c_iter->user_key(), &newest_file_num);
       if (found && c_iter->file_num() != newest_file_num) {
@@ -1171,32 +1172,34 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     if (cbf != nullptr) {
       // check cbf
       if (cbf->isHot(user_key) && sub_compact->compaction->level() >= 1) {
-        hot = true;
+        // hot = true;
         PinnableSlice v;
         Status s;
         MergeContext mc;
         SequenceNumber max_covering_tombstone_seq = 0;
-          bool exists = cfd->GetSuperVersion()->current->CheckKeyExists(
-          read_options, lkey, newest_file_num, FileArea::fHot,
-          &v, nullptr, &s, &mc, &max_covering_tombstone_seq
-        );
-        if (exists) { // drop this key
-          c_iter->Next();
-          continue;
+        // check if cur key is newest
+        // bool exists = cfd->GetSuperVersion()->current->CheckKeyExists(
+        //   read_options, lkey, newest_file_num, FileArea::fHot,
+        //   &v, nullptr, &s, &mc, &max_covering_tombstone_seq
+        // );
+        // only upfloat newest keys in upd 
+        if (newest_file_num == c_iter->file_num()) {
+          // cur key is newest
+          hot = true;
         }
       } else if (cbf->isWarm(user_key) && sub_compact->compaction->level() >= 2) {
-        warm = true;
+        // warm = true;
         PinnableSlice v;
         Status s;
         MergeContext mc;
         SequenceNumber max_covering_tombstone_seq = 0;
-        bool exists = cfd->GetSuperVersion()->current->CheckKeyExists(
-          read_options, lkey, newest_file_num, FileArea::fWarm,
-          &v, nullptr, &s, &mc, &max_covering_tombstone_seq
-        );
-        if (exists) { // drop this key
-          c_iter->Next();
-          continue;
+        // bool exists = cfd->GetSuperVersion()->current->CheckKeyExists(
+        //   read_options, lkey, newest_file_num, FileArea::fWarm,
+        //   &v, nullptr, &s, &mc, &max_covering_tombstone_seq
+        // );
+        if (newest_file_num == c_iter->file_num()) {
+          // cur key is newest
+          warm = true;
         }
       }
     }

@@ -368,6 +368,7 @@ class FilePickerWithHW {
              const InternalKeyComparator* internal_comparator)
       : num_levels_(num_levels),
         curr_level_(static_cast<unsigned int>(-1)),
+        actual_level_(static_cast<unsigned int>(-1)),
         returned_file_level_(static_cast<unsigned int>(-1)),
         hit_file_level_(static_cast<unsigned int>(-1)),
         search_left_bound_(0),
@@ -428,7 +429,8 @@ class FilePickerWithHW {
           // Check if key is within a file's range. If search left bound and
           // right bound point to the same find, we are sure key falls in
           // range.
-          assert(curr_level_ == 0 ||
+          assert(curr_level_ == 0 || actual_level_ == FileArea::fHot ||
+                 actual_level_ == FileArea::fWarm ||
                  curr_index_in_curr_level_ == start_index_in_curr_level_ ||
                  user_comparator_->CompareWithoutTimestamp(
                      user_key_, ExtractUserKey(f->smallest_key)) <= 0);
@@ -442,7 +444,7 @@ class FilePickerWithHW {
 
           // Setup file search bound for the next level based on the
           // comparison results
-          if (curr_level_ > 0) {
+          if (curr_level_ > 0 && actual_level_ != FileArea::fHot && actual_level_ != FileArea::fWarm) {
             file_indexer_->GetNextLevelIndex(curr_level_,
                                             curr_index_in_curr_level_,
                                             cmp_smallest, cmp_largest,
@@ -451,7 +453,8 @@ class FilePickerWithHW {
           }
           // Key falls out of current file's range
           if (cmp_smallest < 0 || cmp_largest > 0) {
-            if (curr_level_ == 0) {
+            if (curr_level_ == 0 || actual_level_ == FileArea::fHot || 
+                actual_level_ == FileArea::fWarm) {
               ++curr_index_in_curr_level_;
               continue;
             } else {
@@ -537,9 +540,11 @@ class FilePickerWithHW {
   // Setup local variables to search next level.
   // Returns false if there are no more levels to search.
   bool PrepareNextLevel() {
-    curr_level_++;
+    if (actual_level_ == curr_level_) {
+      curr_level_++;
+    }
     while (curr_level_ < num_levels_) {
-      // before search L0, search hot files first
+      // before search L1, search hot files first
       if (curr_level_ == 1 && !search_hot_ended) {
         search_hot_ended = true;
         curr_file_level_ = &(*level_files_brief_)[FileArea::fHot]; // hot files
@@ -598,8 +603,8 @@ class FilePickerWithHW {
       // any level. Otherwise, it only occurs at Level-0 (since Put/Deletes
       // are always compacted into a single entry).
       int32_t start_index;
-      if (curr_level_ == 0) {
-        // On Level-0, we read through all files to check for overlap.
+      if (curr_level_ == 0 || actual_level_ == FileArea::fHot || actual_level_ == FileArea::fWarm) {
+        // On Level-0 or level hot or level warm, we read through all files to check for overlap.
         start_index = 0;
       } else {
         // On Level-n (n>=1), files are sorted. Binary search to find the
@@ -1130,6 +1135,31 @@ Version::~Version() {
         vset_->obsolete_files_.push_back(
             ObsoleteFileInfo(f, cfd_->ioptions()->cf_paths[path_id].path));
       }
+    }
+  }
+  // Drop references to hot and warm files
+  for (size_t i = 0; i < storage_info_.hot_files_.size(); i++) {
+    FileMetaData* f = storage_info_.hot_files_[i];
+    assert(f->refs > 0);
+    f->refs--;
+    if (f->refs <= 0) {
+      assert(cfd_ != nullptr);
+      uint32_t path_id = f->fd.GetPathId();
+      assert(path_id < cfd_->ioptions()->cf_paths.size());
+      vset_->obsolete_files_.push_back(
+          ObsoleteFileInfo(f, cfd_->ioptions()->cf_paths[path_id].path));
+    }
+  }
+  for (size_t i = 0; i < storage_info_.warm_files_.size(); i++) {
+    FileMetaData* f = storage_info_.warm_files_[i];
+    assert(f->refs > 0);
+    f->refs--;
+    if (f->refs <= 0) {
+      assert(cfd_ != nullptr);
+      uint32_t path_id = f->fd.GetPathId();
+      assert(path_id < cfd_->ioptions()->cf_paths.size());
+      vset_->obsolete_files_.push_back(
+          ObsoleteFileInfo(f, cfd_->ioptions()->cf_paths[path_id].path));
     }
   }
 }
@@ -2848,6 +2878,10 @@ void Version::GetByFilenum(const ReadOptions& read_options, const LookupKey& k,
             RecordTick(db_statistics_, GET_HIT_L0);
           } else if (fp.GetHitFileLevel() == 1) {
             RecordTick(db_statistics_, GET_HIT_L1);
+          } else if (fp.GetHitFileLevel() == FileArea::fHot) {
+            RecordTick(db_statistics_, GET_HIT_HOT);
+          } else if (fp.GetHitFileLevel() == FileArea::fWarm) {
+            RecordTick(db_statistics_, GET_HIT_WARM);
           } else if (fp.GetHitFileLevel() >= 2) {
             RecordTick(db_statistics_, GET_HIT_L2_AND_UP);
           }
