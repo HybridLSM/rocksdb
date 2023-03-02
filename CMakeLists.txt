@@ -592,6 +592,7 @@ set(SOURCES
         db/compaction/compaction_picker_level.cc
         db/compaction/compaction_picker_universal.cc
         db/compaction/sst_partitioner.cc
+        db/compaction/compaction_within_level.cc
         db/convenience.cc
         db/db_filesnapshot.cc
         db/db_impl/compacted_db_impl.cc

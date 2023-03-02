@@ -1689,6 +1689,7 @@ class DBImpl : public DB {
   // Runs a pre-chosen universal compaction involving bottom level in a
   // separate, bottom-pri thread pool.
   static void BGWorkBottomCompaction(void* arg);
+  static void BGWorkInLevelCompaction(void* arg);
   static void BGWorkFlush(void* arg);
   static void BGWorkPurge(void* arg);
   static void UnscheduleCompactionCallback(void* arg);
@@ -2067,6 +2068,7 @@ class DBImpl : public DB {
   std::deque<SuperVersion*> superversions_to_free_queue_;
   int unscheduled_flushes_;
   int unscheduled_compactions_;
+  int unscheduled_in_level_compactions_;
 
   // count how many background compactions are running or have been scheduled in
   // the BOTTOM pool

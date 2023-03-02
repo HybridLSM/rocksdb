@@ -290,15 +290,9 @@ class VersionStorageInfo {
 
   // REQUIRES: This version has been saved (see VersionSet::SaveTo)
   const std::vector<FileMetaData*>& LevelFiles(int level) const {
+    if (level == FileArea::fHot) return hot_files_;
+    if (level == FileArea::fWarm) return warm_files_;
     return files_[level];
-  }
-
-  const std::vector<FileMetaData*>& HotLevelFiles() const {
-    return hot_files_;
-  }
-
-  const std::vector<FileMetaData*>& WarmLevelFiles() const {
-    return warm_files_;
   }
 
   class FileLocation {
@@ -366,8 +360,17 @@ class VersionStorageInfo {
     if (!location.IsValid()) {
       return nullptr;
     }
+    auto level = location.GetLevel();
+    if (level < num_levels_) {
+      return files_[level][location.GetPosition()];
+    } else if (level == FileArea::fHot) {
+      return hot_files_[location.GetPosition()];
+    } else if (level == FileArea::fWarm) {
+      return warm_files_[location.GetPosition()];
+    }
 
-    return files_[location.GetLevel()][location.GetPosition()];
+    //error
+    return nullptr;
   }
 
   // REQUIRES: This version has been saved (see VersionSet::SaveTo)
@@ -1280,6 +1283,7 @@ class VersionSet {
   // This ensures that a concurrent compaction did not erroneously
   // pick the same files to compact.
   bool VerifyCompactionFileConsistency(Compaction* c);
+  bool VerifyCompactionHWFileConsistency(Compaction* c);
 
   Status GetMetadataForFile(uint64_t number, int* filelevel,
                             FileMetaData** metadata, ColumnFamilyData** cfd);

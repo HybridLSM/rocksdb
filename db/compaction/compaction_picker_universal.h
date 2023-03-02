@@ -23,10 +23,25 @@ class UniversalCompactionPicker : public CompactionPicker {
       const MutableDBOptions& mutable_db_options, VersionStorageInfo* vstorage,
       LogBuffer* log_buffer,
       SequenceNumber earliest_memtable_seqno = kMaxSequenceNumber) override;
+  
   virtual int MaxOutputLevel() const override { return NumberLevels() - 1; }
 
   virtual bool NeedsCompaction(
       const VersionStorageInfo* vstorage) const override;
+  
+  virtual bool NeedsInLevelCompaction(
+      const VersionStorageInfo* /*vstorage*/) const override {
+    return false;
+  }
+  // Always return "nullptr"
+  Compaction* PickInLevelCompaction(
+      const std::string& /*cf_name*/,
+      const MutableCFOptions& /*mutable_cf_options*/,
+      const MutableDBOptions& /*mutable_db_options*/,
+      VersionStorageInfo* /*vstorage*/, LogBuffer* /* log_buffer */,
+      SequenceNumber /* earliest_memtable_seqno */) override {
+    return nullptr;
+  }
 };
 }  // namespace ROCKSDB_NAMESPACE
 #endif  // !ROCKSDB_LITE

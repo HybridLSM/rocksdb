@@ -20,6 +20,7 @@
 #include "test_util/sync_point.h"
 #include "util/cast_util.h"
 #include "util/concurrent_task_limiter_impl.h"
+#include "db/compaction/compaction_within_level.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -2284,7 +2285,7 @@ void DBImpl::MaybeScheduleFlushOrCompaction() {
   }
 
   while (bg_compaction_scheduled_ < bg_job_limits.max_compactions &&
-         unscheduled_compactions_ > 0) {
+         (unscheduled_compactions_ > 0 || unscheduled_in_level_compactions_ > 0)) {
     CompactionArg* ca = new CompactionArg;
     ca->db = this;
     ca->compaction_pri_ = Env::Priority::LOW;
@@ -2293,6 +2294,17 @@ void DBImpl::MaybeScheduleFlushOrCompaction() {
     unscheduled_compactions_--;
     env_->Schedule(&DBImpl::BGWorkCompaction, ca, Env::Priority::LOW, this,
                    &DBImpl::UnscheduleCompactionCallback);
+    //schedule in level compaction if needed
+    if (unscheduled_in_level_compactions_ > 0) {
+      CompactionArg* ca = new CompactionArg;
+      ca->db = this;
+      ca->compaction_pri_ = Env::Priority::LOW;
+      ca->prepicked_compaction = nullptr;
+      bg_compaction_scheduled_++;
+      unscheduled_in_level_compactions_--;
+      env_->Schedule(&DBImpl::BGWorkInLevelCompaction, ca, Env::Priority::LOW, this,
+                  &DBImpl::UnscheduleCompactionCallback);
+    }
   }
 }
 
@@ -2465,6 +2477,16 @@ void DBImpl::BGWorkBottomCompaction(void* arg) {
          !prepicked_compaction->manual_compaction_state);
   ca.db->BackgroundCallCompaction(prepicked_compaction, Env::Priority::BOTTOM);
   delete prepicked_compaction;
+}
+
+void DBImpl::BGWorkInLevelCompaction(void* arg) {
+  CompactionArg ca = *(static_cast<CompactionArg*>(arg));
+  delete static_cast<CompactionArg*>(arg);
+  IOSTATS_SET_THREAD_POOL_ID(Env::Priority::LOW);
+  TEST_SYNC_POINT("DBImpl::BGWorkInLevelCompaction");
+  //prepicked_compaction = nullptr
+  ca.db->BackgroundCallCompaction(nullptr, Env::Priority::LOW);
+
 }
 
 void DBImpl::BGWorkPurge(void* db) {
@@ -2806,6 +2828,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     c.reset(prepicked_compaction->compaction);
   }
   bool is_prepicked = is_manual || c;
+  bool is_in_level = false;
 
   // (manual_compaction->in_progress == false);
   bool trivial_move_disallowed =
@@ -2936,6 +2959,16 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
                                   log_buffer));
       TEST_SYNC_POINT("DBImpl::BackgroundCompaction():AfterPickCompaction");
 
+      if (c == nullptr) {
+        // c is nullptr => no normal compaction.
+        // do in-level compaction when there is no normal compaction
+        TEST_SYNC_POINT("DBImpl::BackgroundCompaction():BeforePickCompaction");
+        c.reset(cfd->PickInLevelCompaction(*mutable_cf_options, mutable_db_options_,
+                                      log_buffer));
+        is_in_level = true;
+        TEST_SYNC_POINT("DBImpl::BackgroundCompaction():AfterPickCompaction");
+      }
+      
       if (c != nullptr) {
         bool enough_room = EnoughRoomForCompaction(
             cfd, *(c->inputs()), &sfm_reserved_compact_space, log_buffer);
@@ -2975,6 +3008,10 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
             // Yes, we need more compactions!
             AddToCompactionQueue(cfd);
             ++unscheduled_compactions_;
+            MaybeScheduleFlushOrCompaction();
+          } else if (cfd->NeedsInLevelCompaction()) {
+            AddToCompactionQueue(cfd);
+            ++unscheduled_in_level_compactions_;
             MaybeScheduleFlushOrCompaction();
           }
         }
@@ -3115,6 +3152,57 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     ++bg_bottom_compaction_scheduled_;
     env_->Schedule(&DBImpl::BGWorkBottomCompaction, ca, Env::Priority::BOTTOM,
                    this, &DBImpl::UnscheduleCompactionCallback);
+  } else if (is_in_level) {
+    TEST_SYNC_POINT_CALLBACK("DBImpl::BackgroundCompaction:BeforeCompaction",
+                             c->column_family_data());
+    int output_level __attribute__((__unused__));
+    output_level = c->output_level();
+    TEST_SYNC_POINT_CALLBACK("DBImpl::BackgroundCompaction:HWInLevel",
+                             &output_level);
+    std::vector<SequenceNumber> snapshot_seqs;
+    SequenceNumber earliest_write_conflict_snapshot;
+    SnapshotChecker* snapshot_checker;
+    GetSnapshotContext(job_context, &snapshot_seqs,
+                       &earliest_write_conflict_snapshot, &snapshot_checker);
+    assert(is_snapshot_supported_ || snapshots_.empty());
+    CompactionWithinLevel compaction_job(
+        job_context->job_id, c.get(), immutable_db_options_,
+        file_options_for_compaction_, versions_.get(), &shutting_down_,
+        preserve_deletes_seqnum_.load(), log_buffer, directories_.GetDbDir(),
+        GetDataDir(c->column_family_data(), c->output_path_id()),
+        GetDataDir(c->column_family_data(), 0), stats_, &mutex_,
+        &error_handler_, snapshot_seqs, earliest_write_conflict_snapshot,
+        snapshot_checker, table_cache_, &event_logger_,
+        c->mutable_cf_options()->paranoid_file_checks,
+        c->mutable_cf_options()->report_bg_io_stats, dbname_,
+        &compaction_job_stats, thread_pri, io_tracer_,
+        is_manual ? &manual_compaction_paused_ : nullptr, db_id_,
+        db_session_id_, c->column_family_data()->GetFullHistoryTsLow(),
+        nullptr,
+        keyupd_lru,
+        cbf);
+    compaction_job.Prepare();
+
+    NotifyOnCompactionBegin(c->column_family_data(), c.get(), status,
+                            compaction_job_stats, job_context->job_id);
+    mutex_.Unlock();
+    TEST_SYNC_POINT_CALLBACK(
+        "DBImpl::BackgroundCompaction:NonTrivial:BeforeRun", nullptr);
+    // Should handle erorr?
+    compaction_job.Run().PermitUncheckedError();
+    TEST_SYNC_POINT("DBImpl::BackgroundCompaction:NonTrivial:AfterRun");
+    mutex_.Lock();
+
+    status = compaction_job.Install(*c->mutable_cf_options());
+    io_s = compaction_job.io_status();
+    if (status.ok()) {
+      InstallSuperVersionAndScheduleWork(c->column_family_data(),
+                                         &job_context->superversion_contexts[0],
+                                         *c->mutable_cf_options());
+    }
+    *made_progress = true;
+    TEST_SYNC_POINT_CALLBACK("DBImpl::BackgroundCompaction:AfterCompaction",
+                             c->column_family_data());
   } else {
     TEST_SYNC_POINT_CALLBACK("DBImpl::BackgroundCompaction:BeforeCompaction",
                              c->column_family_data());

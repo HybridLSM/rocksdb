@@ -2258,11 +2258,49 @@ void Version::GetColumnFamilyMetaData(ColumnFamilyMetaData* cf_meta) {
         level, level_size, std::move(files));
     cf_meta->size += level_size;
   }
+  //Hot&warm
+  for (int level = FileArea::fHot; level <= FileArea::fWarm; level++) {
+    uint64_t level_size = 0;
+    cf_meta->file_count += vstorage->LevelFiles(level).size();
+    std::vector<SstFileMetaData> files;
+    for (const auto& file : vstorage->LevelFiles(level)) {
+      uint32_t path_id = file->fd.GetPathId();
+      std::string file_path;
+      if (path_id < ioptions->cf_paths.size()) {
+        file_path = ioptions->cf_paths[path_id].path;
+      } else {
+        assert(!ioptions->cf_paths.empty());
+        file_path = ioptions->cf_paths.back().path;
+      }
+      const uint64_t file_number = file->fd.GetNumber();
+      files.emplace_back(SstFileMetaData{
+          MakeTableFileName("", file_number), file_number, file_path,
+          static_cast<size_t>(file->fd.GetFileSize()), file->fd.smallest_seqno,
+          file->fd.largest_seqno, file->smallest.user_key().ToString(),
+          file->largest.user_key().ToString(),
+          file->stats.num_reads_sampled.load(std::memory_order_relaxed),
+          file->being_compacted, file->oldest_blob_file_number,
+          file->TryGetOldestAncesterTime(), file->TryGetFileCreationTime(),
+          file->file_checksum, file->file_checksum_func_name});
+      files.back().num_entries = file->num_entries;
+      files.back().num_deletions = file->num_deletions;
+      level_size += file->fd.GetFileSize();
+    }
+    cf_meta->levels.emplace_back(
+        level, level_size, std::move(files));
+    cf_meta->size += level_size;
+  }
 }
 
 uint64_t Version::GetSstFilesSize() {
   uint64_t sst_files_size = 0;
   for (int level = 0; level < storage_info_.num_levels_; level++) {
+    for (const auto& file_meta : storage_info_.LevelFiles(level)) {
+      sst_files_size += file_meta->fd.GetFileSize();
+    }
+  }
+  //hot&warm
+  for (int level = FileArea::fHot; level <= FileArea::fWarm; level++) {
     for (const auto& file_meta : storage_info_.LevelFiles(level)) {
       sst_files_size += file_meta->fd.GetFileSize();
     }
@@ -6650,14 +6688,17 @@ InternalIterator* VersionSet::MakeInputIteratorWithNum(
   // Level-0 files have to be merged together.  For other levels,
   // we will make a concatenating iterator per level.
   // TODO(opt): use concatenating iterator for level-0 if there is no overlap
-  const size_t space = (c->level() == 0 ? c->input_levels(0)->num_files +
+  bool unordered = (c->level() == 0 || c->level() == FileArea::fHot || 
+                                       c->level() == FileArea::fWarm);
+  const size_t space = (unordered? c->input_levels(0)->num_files +
                                               c->num_input_levels() - 1
                                         : c->num_input_levels());
   InternalIterator** list = new InternalIterator* [space];
   size_t num = 0;
   for (size_t which = 0; which < c->num_input_levels(); which++) {
     if (c->input_levels(which)->num_files != 0) {
-      if (c->level(which) == 0) {
+      if (c->level(which) == 0 || c->level(which) == FileArea::fHot || 
+                                  c->level(which) == FileArea::fWarm) {
         const LevelFilesBrief* flevel = c->input_levels(which);
         for (size_t i = 0; i < flevel->num_files; i++) {
           auto file_num = flevel->files[i].fd.GetNumber();
@@ -6698,6 +6739,44 @@ InternalIterator* VersionSet::MakeInputIteratorWithNum(
   return result;
 }
 
+
+// verify that the files listed in this compaction are present
+// in the current version
+bool VersionSet::VerifyCompactionHWFileConsistency(Compaction* c) {
+#ifndef NDEBUG
+  Version* version = c->column_family_data()->current();
+  const VersionStorageInfo* vstorage = version->storage_info();
+  if (c->input_version() != version) {
+    ROCKS_LOG_INFO(
+        db_options_->info_log,
+        "[%s] compaction output being applied to a different base version from"
+        " input version",
+        c->column_family_data()->GetName().c_str());
+  }
+
+  for (size_t input = 0; input < c->num_input_levels(); ++input) {
+    int level = c->level(input);
+    auto& files = level == FileArea::fHot? vstorage->hot_files_ : vstorage->warm_files_;
+    for (size_t i = 0; i < c->num_input_files(input); ++i) {
+      uint64_t number = c->input(input, i)->fd.GetNumber();
+      bool found = false;
+      for (size_t j = 0; j < files.size(); j++) {
+        FileMetaData* f = files[j];
+        if (f->fd.GetNumber() == number) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        return false;  // input files non existent in current version
+      }
+    }
+  }
+#else
+  (void)c;
+#endif
+  return true;     // everything good
+}
 
 // verify that the files listed in this compaction are present
 // in the current version

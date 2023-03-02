@@ -499,9 +499,18 @@ class VersionBuilder::Rep {
 
   uint64_t GetOldestBlobFileNumberForTableFile(int level,
                                                uint64_t file_number) const {
-    assert(level < num_levels_);
+    assert(level < num_levels_ || level == FileArea::fHot
+           || level == FileArea::fWarm);
 
-    const auto& added_files = levels_[level].added_files;
+    LevelState ls;
+    if (level < num_levels_) {
+      ls = levels_[level];
+    } else if (level == FileArea::fHot) {
+      ls = hot_level_;
+    } else {
+      ls = warm_level_;
+    }
+    const auto& added_files = ls.added_files;
 
     auto it = added_files.find(file_number);
     if (it != added_files.end()) {
@@ -525,7 +534,8 @@ class VersionBuilder::Rep {
     const int current_level = GetCurrentLevelForTableFile(file_number);
 
     if (level != current_level) {
-      if (level >= num_levels_) {
+      if (level >= num_levels_ && level != FileArea::fHot 
+                              && level != FileArea::fWarm) {
         has_invalid_levels_ = true;
       }
 
@@ -971,7 +981,7 @@ class VersionBuilder::Rep {
       //hot files
       // const auto& cmp = (level == 0) ? level_zero_cmp_ : level_nonzero_cmp_;
       const auto& cmp = level_zero_cmp_;
-      const auto& hot_files = base_vstorage_->HotLevelFiles();
+      const auto& hot_files = base_vstorage_->LevelFiles(FileArea::fHot);
       const auto& unordered_added_files = hot_level_.added_files;
       vstorage->ReserveHot(hot_files.size() + unordered_added_files.size());
 
@@ -1001,7 +1011,7 @@ class VersionBuilder::Rep {
       //warm files
       // const auto& cmp = (level == 0) ? level_zero_cmp_ : level_nonzero_cmp_;
       const auto& cmp = level_zero_cmp_;
-      const auto& warm_files = base_vstorage_->WarmLevelFiles();
+      const auto& warm_files = base_vstorage_->LevelFiles(FileArea::fWarm);
       const auto& unordered_added_files = warm_level_.added_files;
       vstorage->ReserveWarm(warm_files.size() + unordered_added_files.size());
 

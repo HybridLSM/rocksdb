@@ -59,6 +59,12 @@ class CompactionPicker {
       const MutableDBOptions& mutable_db_options, VersionStorageInfo* vstorage,
       LogBuffer* log_buffer,
       SequenceNumber earliest_memtable_seqno = kMaxSequenceNumber) = 0;
+  
+  virtual Compaction* PickInLevelCompaction(
+      const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
+      const MutableDBOptions& mutable_db_options, VersionStorageInfo* vstorage,
+      LogBuffer* log_buffer,
+      SequenceNumber earliest_memtable_seqno = kMaxSequenceNumber) = 0;
 
   // Return a compaction object for compacting the range [begin,end] in
   // the specified level.  Returns nullptr if there is nothing in that
@@ -84,6 +90,7 @@ class CompactionPicker {
   virtual int MaxOutputLevel() const { return NumberLevels() - 1; }
 
   virtual bool NeedsCompaction(const VersionStorageInfo* vstorage) const = 0;
+  virtual bool NeedsInLevelCompaction(const VersionStorageInfo* vstorage) const = 0;
 
 // Sanitize the input set of compaction input files.
 // When the input parameters do not describe a valid compaction, the
@@ -129,6 +136,10 @@ class CompactionPicker {
   // Is there currently a compaction involving level 0 taking place
   bool IsLevel0CompactionInProgress() const {
     return !level0_compactions_in_progress_.empty();
+  }
+
+  bool IsHWInLevelCompactionInProgress() const {
+    return !HW_in_level_compactions_in_progress_.empty();
   }
 
   // Return true if the passed key range overlap with a compaction output
@@ -213,6 +224,11 @@ class CompactionPicker {
   std::set<Compaction*>* level0_compactions_in_progress() {
     return &level0_compactions_in_progress_;
   }
+
+  std::set<Compaction*>* HW_in_level_compactions_in_progress() {
+    return &HW_in_level_compactions_in_progress_;
+  }
+
   std::unordered_set<Compaction*>* compactions_in_progress() {
     return &compactions_in_progress_;
   }
@@ -231,6 +247,10 @@ class CompactionPicker {
   // Keeps track of all compactions that are running on Level0.
   // Protected by DB mutex
   std::set<Compaction*> level0_compactions_in_progress_;
+
+  // Keeps track of all Hot/Warm's in-level compactions that are running on Level0.
+  // Protected by DB mutex
+  std::set<Compaction*> HW_in_level_compactions_in_progress_;
 
   // Keeps track of all compactions that are running.
   // Protected by DB mutex
@@ -251,6 +271,19 @@ class NullCompactionPicker : public CompactionPicker {
 
   // Always return "nullptr"
   Compaction* PickCompaction(
+      const std::string& /*cf_name*/,
+      const MutableCFOptions& /*mutable_cf_options*/,
+      const MutableDBOptions& /*mutable_db_options*/,
+      VersionStorageInfo* /*vstorage*/, LogBuffer* /* log_buffer */,
+      SequenceNumber /* earliest_memtable_seqno */) override {
+    return nullptr;
+  }
+  virtual bool NeedsInLevelCompaction(
+      const VersionStorageInfo* /*vstorage*/) const override {
+    return false;
+  }
+  // Always return "nullptr"
+  Compaction* PickInLevelCompaction(
       const std::string& /*cf_name*/,
       const MutableCFOptions& /*mutable_cf_options*/,
       const MutableDBOptions& /*mutable_db_options*/,
