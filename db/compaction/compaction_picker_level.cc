@@ -541,7 +541,7 @@ Compaction* LevelCompactionPicker::PickInLevelCompaction(
 
   int cnt = 0;
   for (auto ritr = level_files.rbegin(); ritr != level_files.rend(); ++ritr) {
-    cnt++; // compact 5 files at a time 
+    cnt++; // compact 5 files at a time
     if (cnt > IN_LEVEL_COMPACTION) break;
     FileMetaData* f = *ritr;
     inputs[0].files.push_back(f);
