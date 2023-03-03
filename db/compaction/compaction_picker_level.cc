@@ -15,6 +15,8 @@
 #include "logging/log_buffer.h"
 #include "test_util/sync_point.h"
 
+#define IN_LEVEL_COMPACTION 3
+
 namespace ROCKSDB_NAMESPACE {
 
 bool LevelCompactionPicker::NeedsCompaction(
@@ -42,7 +44,7 @@ bool LevelCompactionPicker::NeedsCompaction(
 bool LevelCompactionPicker::NeedsInLevelCompaction(
     const VersionStorageInfo* vstorage) const {
   // naive version
-  if (vstorage->NumLevelFiles(FileArea::fHot) >= 10) {
+  if (vstorage->NumLevelFiles(FileArea::fHot) >= IN_LEVEL_COMPACTION) {
     return true;
   }
   return false; 
@@ -540,7 +542,7 @@ Compaction* LevelCompactionPicker::PickInLevelCompaction(
   int cnt = 0;
   for (auto ritr = level_files.rbegin(); ritr != level_files.rend(); ++ritr) {
     cnt++; // compact 5 files at a time 
-    if (cnt > 10) break;
+    if (cnt > IN_LEVEL_COMPACTION) break;
     FileMetaData* f = *ritr;
     inputs[0].files.push_back(f);
   }
@@ -568,7 +570,7 @@ Compaction* LevelCompactionPicker::PickInLevelCompaction(
       vstorage, ioptions_, mutable_cf_options, mutable_db_options,
       std::move(inputs), FileArea::fHot, 0, 0, 0, kNoCompression,
       mutable_cf_options.compression_opts,
-      /* max_subcompactions */ 1, {}, /* is manual */ false,
+      /* max_subcompactions */ 0, {}, /* is manual */ false,
       vstorage->CompactionScore(0),
       /* is deletion compaction */ false, CompactionReason::kHWInLevelCompaction);
   return c;
