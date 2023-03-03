@@ -42,7 +42,7 @@ bool LevelCompactionPicker::NeedsCompaction(
 bool LevelCompactionPicker::NeedsInLevelCompaction(
     const VersionStorageInfo* vstorage) const {
   // naive version
-  if (vstorage->NumLevelFiles(FileArea::fHot) >= 10) {
+  if (vstorage->NumLevelFiles(FileArea::fHot) >= 3) {
     return true;
   }
   return false; 
@@ -540,7 +540,7 @@ Compaction* LevelCompactionPicker::PickInLevelCompaction(
   int cnt = 0;
   for (auto ritr = level_files.rbegin(); ritr != level_files.rend(); ++ritr) {
     cnt++; // compact 5 files at a time 
-    if (cnt > 10) break;
+    if (cnt > 3) break;
     FileMetaData* f = *ritr;
     inputs[0].files.push_back(f);
   }
