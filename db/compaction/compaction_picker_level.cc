@@ -15,8 +15,6 @@
 #include "logging/log_buffer.h"
 #include "test_util/sync_point.h"
 
-#define IN_LEVEL_COMPACTION 3
-
 namespace ROCKSDB_NAMESPACE {
 
 bool LevelCompactionPicker::NeedsCompaction(
@@ -42,11 +40,18 @@ bool LevelCompactionPicker::NeedsCompaction(
 }
 
 bool LevelCompactionPicker::NeedsInLevelCompaction(
-    const VersionStorageInfo* vstorage) const {
+    const VersionStorageInfo* vstorage, int level) const {
   // naive version
-  if (vstorage->NumLevelFiles(FileArea::fHot) >= IN_LEVEL_COMPACTION) {
-    return true;
+  auto& files = vstorage->LevelFiles(level);
+  auto max_file_size_for_level = ioptions_.max_file_size_HW;
+  int cnt = 0;
+  for (auto& f : files) {
+    if ( (f->fd.GetFileSize() * 2) < max_file_size_for_level) {
+      cnt++;
+    }
   }
+  if (cnt > 0 && (cnt * 2) > files.size() ) return true;
+  
   return false; 
 }
 
@@ -73,6 +78,7 @@ class LevelCompactionBuilder {
 
   // Pick and return a compaction.
   Compaction* PickCompaction();
+  Compaction* PickCompaction(int level);
 
   // Pick the initial files to compact to the next level. (or together
   // in Intra-L0 compactions)
@@ -335,6 +341,47 @@ Compaction* LevelCompactionBuilder::PickCompaction() {
   return c;
 }
 
+//for hot/warm level in-level compaction
+Compaction* LevelCompactionBuilder::PickCompaction(int level) {
+  const std::vector<FileMetaData*>& level_files = vstorage_->LevelFiles(level);
+  std::vector<CompactionInputFiles> inputs;
+  inputs.emplace_back();
+  inputs[0].level = level;
+
+  int cnt = 0;
+  for (auto ritr = level_files.rbegin(); ritr != level_files.rend(); ++ritr) {
+    if (cnt >= mutable_cf_options_.in_level_comp_trigger) break;
+    FileMetaData* f = *ritr;
+    if (f->being_compacted) continue;
+    inputs[0].files.push_back(f);
+    cnt++; // compact 5 files at a time
+  }
+
+  // Return a nullptr and proceed to size-based FIFO compaction if:
+  // 1. there are no files older than ttl OR
+  // 2. there are a few files older than ttl, but deleting them will not bring
+  //    the total size to be less than max_table_files_size threshold.
+  if (inputs[0].files.empty()) {
+    return nullptr;
+  }
+
+  assert(level == FileArea::fHot || level == FileArea::fWarm);
+  auto max_file_size_for_level = ioptions_.max_file_size_HW;
+
+  auto c = new Compaction(
+      vstorage_, ioptions_, mutable_cf_options_, mutable_db_options_,
+      std::move(inputs), level, max_file_size_for_level,
+      mutable_cf_options_.max_compaction_bytes,
+      GetPathId(ioptions_, mutable_cf_options_, level), kNoCompression,
+       mutable_cf_options_.compression_opts,
+      /* max_subcompactions */ 0, {}, /* is manual */false,
+      vstorage_->CompactionScore(0), false /* deletion_compaction */, 
+      CompactionReason::kHWInLevelCompaction);
+
+  return c;
+  
+}
+
 Compaction* LevelCompactionBuilder::GetCompaction() {
   auto c = new Compaction(
       vstorage_, ioptions_, mutable_cf_options_, mutable_db_options_,
@@ -519,13 +566,12 @@ Compaction* LevelCompactionPicker::PickCompaction(
   return builder.PickCompaction();
 }
 
-Compaction* LevelCompactionPicker::PickInLevelCompaction(
+Compaction* LevelCompactionPicker::PickInLevelCompaction(int level,
   const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
     const MutableDBOptions& mutable_db_options, VersionStorageInfo* vstorage,
     LogBuffer* log_buffer, SequenceNumber earliest_mem_seqno){
-  const int kLevelHot = FileArea::fHot;
-  const std::vector<FileMetaData*>& level_files = vstorage->LevelFiles(FileArea::fHot);
-  
+  assert(level != -1);
+
   if (!HW_in_level_compactions_in_progress_.empty()) {
     ROCKS_LOG_BUFFER(
         log_buffer,
@@ -534,46 +580,11 @@ Compaction* LevelCompactionPicker::PickInLevelCompaction(
         cf_name.c_str());
     return nullptr;
   }
+  LevelCompactionBuilder builder(cf_name, vstorage, earliest_mem_seqno, this,
+                                 log_buffer, mutable_cf_options, ioptions_,
+                                 mutable_db_options);
 
-  std::vector<CompactionInputFiles> inputs;
-  inputs.emplace_back();
-  inputs[0].level = FileArea::fHot;
-
-  int cnt = 0;
-  for (auto ritr = level_files.rbegin(); ritr != level_files.rend(); ++ritr) {
-    cnt++; // compact 5 files at a time
-    if (cnt > IN_LEVEL_COMPACTION) break;
-    FileMetaData* f = *ritr;
-    inputs[0].files.push_back(f);
-  }
-
-  // Return a nullptr and proceed to size-based FIFO compaction if:
-  // 1. there are no files older than ttl OR
-  // 2. there are a few files older than ttl, but deleting them will not bring
-  //    the total size to be less than max_table_files_size threshold.
-  if (inputs[0].files.empty()) {
-    return nullptr;
-  }
-
-  for (const auto& f : inputs[0].files) {
-    uint64_t creation_time = 0;
-    assert(f);
-    if (f->fd.table_reader && f->fd.table_reader->GetTableProperties()) {
-      creation_time = f->fd.table_reader->GetTableProperties()->creation_time;
-    }
-    ROCKS_LOG_BUFFER(log_buffer,
-                     "[%s] HW in-level compaction: picking file %d for deletion",
-                     cf_name.c_str(), f->fd.GetNumber(), creation_time);
-  }
-
-  Compaction* c = new Compaction(
-      vstorage, ioptions_, mutable_cf_options, mutable_db_options,
-      std::move(inputs), FileArea::fHot, 0, 0, 0, kNoCompression,
-      mutable_cf_options.compression_opts,
-      /* max_subcompactions */ 0, {}, /* is manual */ false,
-      vstorage->CompactionScore(0),
-      /* is deletion compaction */ false, CompactionReason::kHWInLevelCompaction);
-  return c;
+  return builder.PickCompaction(level);
 }
 
 }  // namespace ROCKSDB_NAMESPACE

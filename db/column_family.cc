@@ -535,7 +535,8 @@ ColumnFamilyData::ColumnFamilyData(
       prev_compaction_needed_bytes_(0),
       allow_2pc_(db_options.allow_2pc),
       last_memtable_id_(0),
-      db_paths_registered_(false) {
+      db_paths_registered_(false),
+      level_needs_in_level_compaction(-1) {
   if (id_ != kDummyColumnFamilyDataId) {
     // TODO(cc): RegisterDbPaths can be expensive, considering moving it
     // outside of this constructor which might be called with db mutex held.
@@ -1071,9 +1072,9 @@ bool ColumnFamilyData::NeedsCompaction() const {
   return !mutable_cf_options_.disable_auto_compactions &&
          compaction_picker_->NeedsCompaction(current_->storage_info());
 }
-bool ColumnFamilyData::NeedsInLevelCompaction() const {
+bool ColumnFamilyData::NeedsInLevelCompaction(int level) const {
   return !mutable_cf_options_.disable_auto_compactions &&
-         compaction_picker_->NeedsInLevelCompaction(current_->storage_info());
+         compaction_picker_->NeedsInLevelCompaction(current_->storage_info(), level);
 }
 
 Compaction* ColumnFamilyData::PickCompaction(
@@ -1096,7 +1097,7 @@ Compaction* ColumnFamilyData::PickInLevelCompaction(
   SequenceNumber earliest_mem_seqno =
       std::min(mem_->GetEarliestSequenceNumber(),
                imm_.current()->GetEarliestSequenceNumber(false));
-  auto* result = compaction_picker_->PickInLevelCompaction(
+  auto* result = compaction_picker_->PickInLevelCompaction(level_needs_in_level_compaction,
       GetName(), mutable_options, mutable_db_options, current_->storage_info(),
       log_buffer, earliest_mem_seqno);
   if (result != nullptr) {

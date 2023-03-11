@@ -60,7 +60,7 @@ class CompactionPicker {
       LogBuffer* log_buffer,
       SequenceNumber earliest_memtable_seqno = kMaxSequenceNumber) = 0;
   
-  virtual Compaction* PickInLevelCompaction(
+  virtual Compaction* PickInLevelCompaction(int level,
       const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
       const MutableDBOptions& mutable_db_options, VersionStorageInfo* vstorage,
       LogBuffer* log_buffer,
@@ -90,7 +90,7 @@ class CompactionPicker {
   virtual int MaxOutputLevel() const { return NumberLevels() - 1; }
 
   virtual bool NeedsCompaction(const VersionStorageInfo* vstorage) const = 0;
-  virtual bool NeedsInLevelCompaction(const VersionStorageInfo* vstorage) const = 0;
+  virtual bool NeedsInLevelCompaction(const VersionStorageInfo* vstorage, int level) const = 0;
 
 // Sanitize the input set of compaction input files.
 // When the input parameters do not describe a valid compaction, the
@@ -279,11 +279,11 @@ class NullCompactionPicker : public CompactionPicker {
     return nullptr;
   }
   virtual bool NeedsInLevelCompaction(
-      const VersionStorageInfo* /*vstorage*/) const override {
+      const VersionStorageInfo* /*vstorage*/, int level) const override {
     return false;
   }
   // Always return "nullptr"
-  Compaction* PickInLevelCompaction(
+  Compaction* PickInLevelCompaction(int level,
       const std::string& /*cf_name*/,
       const MutableCFOptions& /*mutable_cf_options*/,
       const MutableDBOptions& /*mutable_db_options*/,

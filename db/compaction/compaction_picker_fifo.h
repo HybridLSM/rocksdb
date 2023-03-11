@@ -26,11 +26,11 @@ class FIFOCompactionPicker : public CompactionPicker {
       SequenceNumber earliest_memtable_seqno = kMaxSequenceNumber) override;
   
   virtual bool NeedsInLevelCompaction(
-      const VersionStorageInfo* /*vstorage*/) const override {
+      const VersionStorageInfo* /*vstorage*/, int level) const override {
     return false;
   }
   // Always return "nullptr"
-  Compaction* PickInLevelCompaction(
+  Compaction* PickInLevelCompaction(int level,
       const std::string& /*cf_name*/,
       const MutableCFOptions& /*mutable_cf_options*/,
       const MutableDBOptions& /*mutable_db_options*/,

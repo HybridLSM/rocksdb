@@ -382,7 +382,7 @@ class ColumnFamilyData {
   // See documentation in compaction_picker.h
   // REQUIRES: DB mutex held
   bool NeedsCompaction() const;
-  bool NeedsInLevelCompaction() const;
+  bool NeedsInLevelCompaction(int level) const;
   // REQUIRES: DB mutex held
   Compaction* PickCompaction(const MutableCFOptions& mutable_options,
                              const MutableDBOptions& mutable_db_options,
@@ -531,6 +531,10 @@ class ColumnFamilyData {
 
   ThreadLocalPtr* TEST_GetLocalSV() { return local_sv_.get(); }
 
+  void SetLevelNeedsInLevelCompaction(int level) {
+    level_needs_in_level_compaction = level;
+  }
+
  private:
   friend class ColumnFamilySet;
   static const uint32_t kDummyColumnFamilyDataId;
@@ -545,6 +549,8 @@ class ColumnFamilyData {
                    const std::shared_ptr<IOTracer>& io_tracer);
 
   std::vector<std::string> GetDbPaths() const;
+
+  int level_needs_in_level_compaction;
 
   uint32_t id_;
   const std::string name_;

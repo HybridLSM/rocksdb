@@ -221,6 +221,8 @@ struct ColumnFamilyOptions : public AdvancedColumnFamilyOptions {
   // Dynamically changeable through SetOptions() API
   int level0_file_num_compaction_trigger = 4;
 
+  int in_level_comp_trigger = 4;
+
   // If non-nullptr, use the specified function to determine the
   // prefixes for keys.  These prefixes will be placed in the filter.
   // Depending on the workload, this can reduce the number of read-IOP

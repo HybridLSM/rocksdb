@@ -3009,11 +3009,17 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
             AddToCompactionQueue(cfd);
             ++unscheduled_compactions_;
             MaybeScheduleFlushOrCompaction();
-          } else if (cfd->NeedsInLevelCompaction()) {
+          } else if (cfd->NeedsInLevelCompaction(FileArea::fHot)) {
+            cfd->SetLevelNeedsInLevelCompaction(FileArea::fHot);
             AddToCompactionQueue(cfd);
             ++unscheduled_in_level_compactions_;
             MaybeScheduleFlushOrCompaction();
-          }
+          } else if (cfd->NeedsInLevelCompaction(FileArea::fWarm)) {
+            cfd->SetLevelNeedsInLevelCompaction(FileArea::fWarm);
+            AddToCompactionQueue(cfd);
+            ++unscheduled_in_level_compactions_;
+            MaybeScheduleFlushOrCompaction();
+          } 
         }
       }
     }

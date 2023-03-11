@@ -2739,7 +2739,11 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
         // TODO: update per-level perfcontext user_key_return_count for kMerge
         break;
       case GetContext::kFound:
-        if (fp.GetHitFileLevel() == 0) {
+        if (fp.GetHitFileLevel() == FileArea::fHot) {
+          RecordTick(db_statistics_, GET_HIT_HOT);
+        } else if (fp.GetHitFileLevel() == FileArea::fWarm) {
+          RecordTick(db_statistics_, GET_HIT_WARM);
+        } else if (fp.GetHitFileLevel() == 0) {
           RecordTick(db_statistics_, GET_HIT_L0);
         } else if (fp.GetHitFileLevel() == 1) {
           RecordTick(db_statistics_, GET_HIT_L1);
